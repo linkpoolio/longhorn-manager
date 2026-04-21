@@ -1900,13 +1900,10 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			},
 		})
 
-		// Mount /dev/infiniband so SPDK can open ibverbs for NVMe-oF RDMA.
-		// libibverbs hardcodes that path, so redirecting via /host/dev is
-		// not an option. DirectoryOrCreate keeps us portable: on nodes
-		// without RDMA hardware the kubelet creates an empty dir in
-		// devtmpfs (reset at reboot), SPDK's nvmf_create_transport(rdma)
-		// fails, and the engine falls back to TCP. Privileged mode
-		// already grants CAP_SYS_RAWIO/CAP_IPC_LOCK so no extra caps.
+		// libibverbs hardcodes /dev/infiniband — redirecting via /host is
+		// not an option. DirectoryOrCreate lets non-RDMA nodes mount an
+		// empty dir; SPDK's nvmf_create_transport(rdma) then fails and
+		// the engine falls back to TCP.
 		podSpec.Spec.Containers[0].VolumeMounts = append(podSpec.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 			MountPath:        "/dev/infiniband",
 			Name:             "dev-infiniband",

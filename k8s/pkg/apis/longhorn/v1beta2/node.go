@@ -11,12 +11,7 @@ const (
 	NodeConditionTypeNFSClientInstalled  = "NFSClientInstalled"
 	NodeConditionTypeSchedulable         = "Schedulable"
 	NodeConditionTypeHugePagesAvailable  = "HugePagesAvailable"
-	// NodeConditionTypeNvmfRDMACapable is True when the node has the kernel
-	// modules required for NVMe-oF RDMA loaded (nvme_rdma + ib_core). It is
-	// informational: Longhorn v2 continues to work with TCP-only when this
-	// is False. Used by the scheduler to prefer RDMA-capable nodes and by
-	// the instance manager to pick the listener transport at engine startup.
-	NodeConditionTypeNvmfRDMACapable = "NvmfRDMACapable"
+	NodeConditionTypeNvmfRDMACapable     = "NvmfRDMACapable"
 )
 
 const (
