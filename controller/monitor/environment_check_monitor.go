@@ -41,8 +41,21 @@ const (
 )
 
 var (
-	kernelModules       = map[string]string{"CONFIG_DM_CRYPT": "dm_crypt"}
-	kernelModulesV2     = map[string]string{"CONFIG_VFIO_PCI": "vfio_pci", "CONFIG_UIO_PCI_GENERIC": "uio_pci_generic", "CONFIG_NVME_TCP": "nvme_tcp"}
+	kernelModules   = map[string]string{"CONFIG_DM_CRYPT": "dm_crypt"}
+	kernelModulesV2 = map[string]string{"CONFIG_VFIO_PCI": "vfio_pci", "CONFIG_UIO_PCI_GENERIC": "uio_pci_generic", "CONFIG_NVME_TCP": "nvme_tcp"}
+	// kernelModulesV2RDMA are the modules required to use NVMe-oF RDMA as an
+	// alternative to TCP for v2 replica traffic. They are checked via a
+	// separate code path so their absence does NOT fail
+	// NodeConditionTypeKernelModulesLoaded — v2 remains operational on
+	// TCP-only nodes. Instead the result flows into
+	// NodeConditionTypeNvmfRDMACapable, which the scheduler and engine use
+	// to opt into RDMA when available.
+	//
+	// rdma_rxe (soft-RoCE) is intentionally omitted: many production nodes
+	// have a physical RNIC (mlx5_*, mlx4_*) and don't need it; checking
+	// only nvme_rdma + ib_core lets both physical and soft-RoCE fabrics
+	// report capable.
+	kernelModulesV2RDMA = map[string]string{"CONFIG_NVME_RDMA": "nvme_rdma", "CONFIG_INFINIBAND": "ib_core"}
 	nfsClientVersions   = map[string]string{"CONFIG_NFS_V4_2": "nfs", "CONFIG_NFS_V4_1": "nfs", "CONFIG_NFS_V4": "nfs"}
 	nfsProtocolVersions = map[string]bool{"4.0": true, "4.1": true, "4.2": true}
 )
@@ -173,9 +186,53 @@ func (m *EnvironmentCheckMonitor) environmentCheck(kubeNode *corev1.Node) *Colle
 
 	if isV2DataEngine {
 		m.checkHugePages(kubeNode, collectedData)
+		m.checkNvmfRDMACapability(kubeNode, collectedData)
 	}
 
 	return collectedData
+}
+
+// checkNvmfRDMACapability reports a separate condition for whether this node
+// can serve NVMe-oF RDMA. It is non-blocking: a False result does not affect
+// v2 data-engine health, since TCP continues to work. The condition drives
+// transport selection in downstream controllers.
+func (m *EnvironmentCheckMonitor) checkNvmfRDMACapability(kubeNode *corev1.Node, collectedData *CollectedEnvironmentCheckInfo) {
+	notFound, err := checkModulesLoadedUsingkmod(kernelModulesV2RDMA)
+	if err != nil {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonNamespaceExecutorErr),
+			fmt.Sprintf("Failed to probe NVMf RDMA kernel modules: %v", err.Error()))
+		return
+	}
+
+	if len(notFound) == 0 {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusTrue, "",
+			fmt.Sprintf("NVMf RDMA kernel modules %v are loaded", getModulesConfigsList(kernelModulesV2RDMA, false)))
+		return
+	}
+
+	notLoaded, err := m.checkModulesLoadedByConfigFile(notFound, kubeNode.Status.NodeInfo.KernelVersion)
+	if err != nil {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonCheckKernelConfigFailed),
+			fmt.Sprintf("Failed to check kernel config for NVMf RDMA modules %v: %v", notFound, err.Error()))
+		return
+	}
+
+	if len(notLoaded) != 0 {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonNvmfRDMAModulesMissing),
+			fmt.Sprintf("NVMf RDMA kernel modules %v are not loaded; node will use TCP only", notLoaded))
+		return
+	}
+
+	collectedData.conditions = types.SetCondition(collectedData.conditions,
+		longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusTrue, "",
+		fmt.Sprintf("NVMf RDMA kernel modules %v are loaded", getModulesConfigsList(kernelModulesV2RDMA, false)))
 }
 
 func (m *EnvironmentCheckMonitor) syncPackagesInstalled(kubeNode *corev1.Node, namespaces []lhtypes.Namespace, collectedData *CollectedEnvironmentCheckInfo) {
