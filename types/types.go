@@ -137,6 +137,9 @@ const (
 	NodeCreateDefaultDiskLabelValueConfig     = "config"
 	NodeDisableV2DataEngineLabelKey           = "node.longhorn.io/disable-v2-data-engine"
 	NodeDisableV2DataEngineLabelKeyTrue       = "true"
+	NodeNvmfTransportLabelKey                 = "node.longhorn.io/nvmf-transport"
+	NodeNvmfTransportLabelValueTCP            = "tcp"
+	NodeNvmfTransportLabelValueRDMA           = "rdma"
 	KubeNodeDefaultDiskConfigAnnotationKey    = "node.longhorn.io/default-disks-config"
 	KubeNodeDefaultNodeTagConfigAnnotationKey = "node.longhorn.io/default-node-tags"
 

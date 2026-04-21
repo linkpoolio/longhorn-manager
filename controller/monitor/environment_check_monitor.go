@@ -43,6 +43,7 @@ const (
 var (
 	kernelModules       = map[string]string{"CONFIG_DM_CRYPT": "dm_crypt"}
 	kernelModulesV2     = map[string]string{"CONFIG_VFIO_PCI": "vfio_pci", "CONFIG_UIO_PCI_GENERIC": "uio_pci_generic", "CONFIG_NVME_TCP": "nvme_tcp"}
+	kernelModulesV2RDMA = map[string]string{"CONFIG_NVME_RDMA": "nvme_rdma", "CONFIG_INFINIBAND": "ib_core"}
 	nfsClientVersions   = map[string]string{"CONFIG_NFS_V4_2": "nfs", "CONFIG_NFS_V4_1": "nfs", "CONFIG_NFS_V4": "nfs"}
 	nfsProtocolVersions = map[string]bool{"4.0": true, "4.1": true, "4.2": true}
 )
@@ -173,9 +174,64 @@ func (m *EnvironmentCheckMonitor) environmentCheck(kubeNode *corev1.Node) *Colle
 
 	if isV2DataEngine {
 		m.checkHugePages(kubeNode, collectedData)
+		m.checkNvmfRDMACapability(kubeNode, collectedData)
 	}
 
 	return collectedData
+}
+
+// checkNvmfRDMACapability is non-blocking: a False result does not affect
+// NodeConditionTypeKernelModulesLoaded since v2 keeps working on TCP.
+func (m *EnvironmentCheckMonitor) checkNvmfRDMACapability(kubeNode *corev1.Node, collectedData *CollectedEnvironmentCheckInfo) {
+	rdmaCapable := m.probeNvmfRDMAModules(kubeNode, collectedData)
+
+	labelValue := types.NodeNvmfTransportLabelValueTCP
+	if rdmaCapable {
+		labelValue = types.NodeNvmfTransportLabelValueRDMA
+	}
+	if err := m.ds.SetKubernetesNodeLabel(kubeNode.Name, types.NodeNvmfTransportLabelKey, labelValue); err != nil {
+		m.logger.WithError(err).Warnf("Failed to set %s label on node %s", types.NodeNvmfTransportLabelKey, kubeNode.Name)
+	}
+}
+
+func (m *EnvironmentCheckMonitor) probeNvmfRDMAModules(kubeNode *corev1.Node, collectedData *CollectedEnvironmentCheckInfo) bool {
+	notFound, err := checkModulesLoadedUsingkmod(kernelModulesV2RDMA)
+	if err != nil {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonNamespaceExecutorErr),
+			fmt.Sprintf("Failed to probe NVMf RDMA kernel modules: %v", err.Error()))
+		return false
+	}
+
+	if len(notFound) == 0 {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusTrue, "",
+			fmt.Sprintf("NVMf RDMA kernel modules %v are loaded", getModulesConfigsList(kernelModulesV2RDMA, false)))
+		return true
+	}
+
+	notLoaded, err := m.checkModulesLoadedByConfigFile(notFound, kubeNode.Status.NodeInfo.KernelVersion)
+	if err != nil {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonCheckKernelConfigFailed),
+			fmt.Sprintf("Failed to check kernel config for NVMf RDMA modules %v: %v", notFound, err.Error()))
+		return false
+	}
+
+	if len(notLoaded) != 0 {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonNvmfRDMAModulesMissing),
+			fmt.Sprintf("NVMf RDMA kernel modules %v are not loaded; node will use TCP only", notLoaded))
+		return false
+	}
+
+	collectedData.conditions = types.SetCondition(collectedData.conditions,
+		longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusTrue, "",
+		fmt.Sprintf("NVMf RDMA kernel modules %v are loaded", getModulesConfigsList(kernelModulesV2RDMA, false)))
+	return true
 }
 
 func (m *EnvironmentCheckMonitor) syncPackagesInstalled(kubeNode *corev1.Node, namespaces []lhtypes.Namespace, collectedData *CollectedEnvironmentCheckInfo) {
