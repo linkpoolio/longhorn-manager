@@ -27,6 +27,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 
 	"github.com/longhorn/longhorn-manager/types"
 
@@ -599,6 +600,19 @@ func (s *DataStore) AddLabelToManagerPod(nodeName string, label map[string]strin
 	if changed {
 		_, err = s.UpdatePod(pod)
 	}
+	return err
+}
+
+func (s *DataStore) SetKubernetesNodeLabel(nodeName, key, value string) error {
+	node, err := s.GetKubernetesNodeRO(nodeName)
+	if err != nil {
+		return err
+	}
+	if existing, ok := node.Labels[key]; ok && existing == value {
+		return nil
+	}
+	cfg := corev1ac.Node(nodeName).WithLabels(map[string]string{key: value})
+	_, err = s.kubeClient.CoreV1().Nodes().Apply(context.TODO(), cfg, metav1.ApplyOptions{FieldManager: "longhorn-manager"})
 	return err
 }
 
