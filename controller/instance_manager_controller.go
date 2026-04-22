@@ -1886,6 +1886,16 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 	}
 
 	if types.IsDataEngineV2(dataEngine) {
+		// RDMA listeners can only bind to IPs assigned to the RoCE device; pod-network
+		// IPs fail rdma_bind_addr(). Opt v2 IMs on RDMA-labelled nodes into hostNetwork
+		// so SPDK listens on the node's RoCE-capable interface. Non-RDMA nodes stay on
+		// pod network to avoid host-port exposure without justification.
+		if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil &&
+			kubeNode.Labels[types.NodeNvmfTransportLabelKey] == types.NodeNvmfTransportLabelValueRDMA {
+			podSpec.Spec.HostNetwork = true
+			podSpec.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
+		}
+
 		podSpec.Spec.Containers[0].VolumeMounts = append(podSpec.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
 			MountPath: "/hugepages",
 			Name:      "hugepage",
