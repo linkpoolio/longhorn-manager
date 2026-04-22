@@ -140,6 +140,8 @@ const (
 	NodeNvmfTransportLabelKey                 = "node.longhorn.io/nvmf-transport"
 	NodeNvmfTransportLabelValueTCP            = "tcp"
 	NodeNvmfTransportLabelValueRDMA           = "rdma"
+	NodeSpdkInterruptModeLabelKey             = "node.longhorn.io/spdk-interrupt-mode"
+	NodeSpdkCPUMaskLabelKey                   = "node.longhorn.io/spdk-cpu-mask"
 	KubeNodeDefaultDiskConfigAnnotationKey    = "node.longhorn.io/default-disks-config"
 	KubeNodeDefaultNodeTagConfigAnnotationKey = "node.longhorn.io/default-node-tags"
 

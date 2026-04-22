@@ -566,13 +566,9 @@ func (imc *InstanceManagerController) isDateEngineCPUMaskApplied(im *longhorn.In
 		return true, nil
 	}
 
-	if im.Spec.DataEngineSpec.V2.CPUMask != "" {
-		return im.Spec.DataEngineSpec.V2.CPUMask == im.Status.DataEngineStatus.V2.CPUMask, nil
-	}
-
-	value, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
+	value, err := imc.getEffectiveSpdkCPUMask(im)
 	if err != nil {
-		return true, errors.Wrapf(err, "failed to get %v setting for updating data engine CPU mask", types.SettingNameDataEngineCPUMask)
+		return true, errors.Wrapf(err, "failed to resolve effective data engine CPU mask")
 	}
 
 	return value == im.Status.DataEngineStatus.V2.CPUMask, nil
@@ -934,12 +930,52 @@ func (imc *InstanceManagerController) isSettingInterruptModeEnabledSynced(settin
 		return true, nil
 	}
 
-	settingValue, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineInterruptModeEnabled, im.Spec.DataEngine)
+	effective, err := imc.getEffectiveSpdkInterruptMode(im)
 	if err != nil {
 		return false, err
 	}
 
-	return im.Status.DataEngineStatus.V2.InterruptModeEnabled == settingValue, nil
+	return im.Status.DataEngineStatus.V2.InterruptModeEnabled == effective, nil
+}
+
+// getEffectiveSpdkInterruptMode resolves the SPDK interrupt-mode flag for a v2
+// InstanceManager with node-level overrides layered on top of the cluster
+// Setting. Precedence (highest first):
+//  1. If the node carries node.longhorn.io/nvmf-transport=rdma, force "false".
+//     SPDK's RDMA poll groups cannot use fd-based interrupt wakeup, so enabling
+//     interrupt mode on an RDMA node prevents the transport from registering.
+//  2. An explicit node.longhorn.io/spdk-interrupt-mode label ("true"/"false").
+//  3. The cluster-wide data-engine-interrupt-mode-enabled Setting.
+func (imc *InstanceManagerController) getEffectiveSpdkInterruptMode(im *longhorn.InstanceManager) (string, error) {
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if kubeNode.Labels[types.NodeNvmfTransportLabelKey] == types.NodeNvmfTransportLabelValueRDMA {
+			return "false", nil
+		}
+		if v, ok := kubeNode.Labels[types.NodeSpdkInterruptModeLabelKey]; ok {
+			switch v {
+			case "true", "false":
+				return v, nil
+			}
+		}
+	}
+	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineInterruptModeEnabled, im.Spec.DataEngine)
+}
+
+// getEffectiveSpdkCPUMask resolves the SPDK reactor CPU mask for a v2
+// InstanceManager. Precedence (highest first):
+//  1. im.Spec.DataEngineSpec.V2.CPUMask (per-IM override, upstream mechanism).
+//  2. node.longhorn.io/spdk-cpu-mask label on the kube node (hex string, e.g. "0xFF").
+//  3. The cluster-wide data-engine-cpu-mask Setting.
+func (imc *InstanceManagerController) getEffectiveSpdkCPUMask(im *longhorn.InstanceManager) (string, error) {
+	if im.Spec.DataEngineSpec.V2.CPUMask != "" {
+		return im.Spec.DataEngineSpec.V2.CPUMask, nil
+	}
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if v, ok := kubeNode.Labels[types.NodeSpdkCPUMaskLabelKey]; ok && v != "" {
+			return v, nil
+		}
+	}
+	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
 }
 
 func (imc *InstanceManagerController) syncInstanceManagerAPIVersion(im *longhorn.InstanceManager) error {
@@ -1680,17 +1716,12 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 		}
 
 		// CPU mask is required for SPDK.
-		cpuMask := im.Spec.DataEngineSpec.V2.CPUMask
+		cpuMask, err := imc.getEffectiveSpdkCPUMask(im)
+		if err != nil {
+			return nil, err
+		}
 		if cpuMask == "" {
-			value, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, dataEngine)
-			if err != nil {
-				return nil, err
-			}
-
-			cpuMask = value
-			if cpuMask == "" {
-				return nil, fmt.Errorf("failed to get CPU mask setting for data engine %v", dataEngine)
-			}
+			return nil, fmt.Errorf("failed to get CPU mask setting for data engine %v", dataEngine)
 		}
 		im.Status.DataEngineStatus.V2.CPUMask = cpuMask
 
@@ -1723,7 +1754,7 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			"--spdk-enabled",
 			"--listen", fmt.Sprintf("0.0.0.0:%d", engineapi.InstanceManagerProcessManagerServiceDefaultPort)}
 
-		interruptMode, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineInterruptModeEnabled, dataEngine)
+		interruptMode, err := imc.getEffectiveSpdkInterruptMode(im)
 		if err != nil {
 			return nil, err
 		}
