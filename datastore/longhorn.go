@@ -442,7 +442,7 @@ func GetSettingValidValue(definition types.SettingDefinition, value string) (str
 	// Reject any data engine types that are not in the default values
 	for dataEngine := range values {
 		if _, ok := defaultValues[dataEngine]; !ok {
-			return "", fmt.Errorf("value %v of settings %v is invalid: mismatched data engines for setting %v", value, definition.DisplayName, definition.DisplayName)
+			return "", fmt.Errorf("value %v is invalid for setting %v: contains unsupported data engine types", value, definition.DisplayName)
 		}
 	}
 
