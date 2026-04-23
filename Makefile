@@ -7,7 +7,7 @@ DEFAULT_PLATFORMS := linux/amd64,linux/arm64
 
 .PHONY: build validate test ci package
 build:
-	docker buildx build --target build-artifacts --output type=local,dest=. -f Dockerfile .
+	docker buildx build --platform linux/amd64 --target build-artifacts --output type=local,dest=. -f Dockerfile .
 
 validate:
 	docker buildx build --target validate -f Dockerfile .
