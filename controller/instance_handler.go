@@ -325,6 +325,10 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 	}
 	if im != nil {
 		log = log.WithFields(logrus.Fields{"instanceManager": im.Name})
+		if status.InstanceManagerName != "" && status.InstanceManagerName != im.Name {
+			log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
+			status.InstanceManagerName = im.Name
+		}
 	}
 
 	if spec.LogRequested {
