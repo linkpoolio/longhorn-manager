@@ -71,6 +71,46 @@ func (s *TestSuite) TestReplicaTimeoutSettingsInSettingNameList(c *C) {
 	}
 }
 
+func (s *TestSuite) TestLvolClearMethodSettingShape(c *C) {
+	def, ok := GetSettingDefinition(SettingNameDataEngineLvolClearMethod)
+	c.Assert(ok, Equals, true)
+	c.Assert(def.Type, Equals, SettingTypeString)
+	c.Assert(def.DataEngineSpecific, Equals, true)
+	c.Assert(def.Category, Equals, SettingCategoryDangerZone)
+	c.Assert(def.Default, Equals, `{"v2":""}`)
+
+	// Choices must include "" (SPDK default) and the three SPDK-supported values.
+	choices := map[string]bool{}
+	for _, ch := range def.Choices {
+		if s, ok := ch.(string); ok {
+			choices[s] = true
+		}
+	}
+	for _, want := range []string{"", "none", "unmap", "write_zeroes"} {
+		c.Assert(choices[want], Equals, true, Commentf("missing choice %q", want))
+	}
+}
+
+func (s *TestSuite) TestLvstoreClusterSizeSettingShape(c *C) {
+	def, ok := GetSettingDefinition(SettingNameDataEngineLvstoreClusterSize)
+	c.Assert(ok, Equals, true)
+	c.Assert(def.Type, Equals, SettingTypeInt)
+	c.Assert(def.DataEngineSpecific, Equals, true)
+	c.Assert(def.Category, Equals, SettingCategoryDangerZone)
+	c.Assert(def.Default, Equals, `{"v2":"1048576"}`)
+	c.Assert(def.ValueIntRange[ValueIntRangeMinimum], Equals, 65536)
+	c.Assert(def.ValueIntRange[ValueIntRangeMaximum], Equals, 268435456)
+}
+
+func (s *TestSuite) TestLvolThinProvisionSettingShape(c *C) {
+	def, ok := GetSettingDefinition(SettingNameDataEngineLvolThinProvision)
+	c.Assert(ok, Equals, true)
+	c.Assert(def.Type, Equals, SettingTypeBool)
+	c.Assert(def.DataEngineSpecific, Equals, true)
+	c.Assert(def.Category, Equals, SettingCategoryDangerZone)
+	c.Assert(def.Default, Equals, `{"v2":"true"}`)
+}
+
 func (s *TestSuite) TestReplicaTimeoutEnvVarsDistinct(c *C) {
 	// The spdk-engine init() path reads five distinct env vars; a copy-paste
 	// error that collapses two into the same name would silently drop a

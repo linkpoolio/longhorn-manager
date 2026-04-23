@@ -158,6 +158,9 @@ const (
 	SettingNameDataEngineReplicaReconnectDelaySec                       = SettingName("data-engine-replica-reconnect-delay-sec")
 	SettingNameDataEngineReplicaTransportAckTimeout                     = SettingName("data-engine-replica-transport-ack-timeout")
 	SettingNameDataEngineReplicaKeepAliveTimeoutMs                      = SettingName("data-engine-replica-keep-alive-timeout-ms")
+	SettingNameDataEngineLvolClearMethod                                = SettingName("data-engine-lvol-clear-method")
+	SettingNameDataEngineLvstoreClusterSize                             = SettingName("data-engine-lvstore-cluster-size")
+	SettingNameDataEngineLvolThinProvision                              = SettingName("data-engine-lvol-thin-provision")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -284,6 +287,9 @@ var (
 		SettingNameDataEngineReplicaReconnectDelaySec,
 		SettingNameDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs,
+		SettingNameDataEngineLvolClearMethod,
+		SettingNameDataEngineLvstoreClusterSize,
+		SettingNameDataEngineLvolThinProvision,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -448,6 +454,9 @@ var (
 		SettingNameDataEngineReplicaReconnectDelaySec:                       SettingDefinitionDataEngineReplicaReconnectDelaySec,
 		SettingNameDataEngineReplicaTransportAckTimeout:                     SettingDefinitionDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs:                      SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs,
+		SettingNameDataEngineLvolClearMethod:                                SettingDefinitionDataEngineLvolClearMethod,
+		SettingNameDataEngineLvstoreClusterSize:                             SettingDefinitionDataEngineLvstoreClusterSize,
+		SettingNameDataEngineLvolThinProvision:                              SettingDefinitionDataEngineLvolThinProvision,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1871,6 +1880,60 @@ var (
 		Default:            fmt.Sprintf("{%q:\"10000\"}", longhorn.DataEngineTypeV2),
 		ValueIntRange: map[string]int{
 			ValueIntRangeMinimum: 0,
+		},
+	}
+
+	SettingDefinitionDataEngineLvolClearMethod = SettingDefinition{
+		DisplayName: "Lvol Clear Method",
+		Description: "Applies only to the V2 Data Engine. Controls the clear_method the engine passes to bdev_lvol_create. " +
+			"Blank means SPDK default (unmap). Use \"none\" when the underlying bdev (typically AIO on loop/LVM) " +
+			"services UNMAP via synchronous fallocate on the SPDK reactor, which can stall the RPC queue and trip " +
+			"the instance manager liveness probe. Use \"write_zeroes\" to explicitly zero freed clusters.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeString,
+		Required:           false,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"\"}", longhorn.DataEngineTypeV2),
+		Choices:            []any{"", "none", "unmap", "write_zeroes"},
+	}
+
+	SettingDefinitionDataEngineLvolThinProvision = SettingDefinition{
+		DisplayName: "Lvol Thin Provision",
+		Description: "Applies only to the V2 Data Engine. Controls whether new lvols are created with thin provisioning. " +
+			"true (default) allocates clusters lazily on first write, which triggers a per-cluster blob metadata sync " +
+			"barrier that can cap first-write throughput (e.g. mkfs on a fresh large volume, or shallow_copy during " +
+			"rebuild — see SPDK issue #359). Set to false on installs where the underlying bdev is already thick-" +
+			"allocated (e.g. a fixed-size LVM LV) so the blobstore-level thin tracking adds no capacity savings and " +
+			"only contributes latency. Changing this setting only affects newly created lvols; existing blobs keep " +
+			"their original thin/thick state.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeBool,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"true\"}", longhorn.DataEngineTypeV2),
+	}
+
+	SettingDefinitionDataEngineLvstoreClusterSize = SettingDefinition{
+		DisplayName: "Lvstore Cluster Size",
+		Description: "Applies only to the V2 Data Engine. Size in bytes of each cluster in new SPDK lvstores. " +
+			"Larger clusters reduce the per-cluster blob metadata sync that caps v2 replica rebuild throughput " +
+			"(SPDK issue #359) at the cost of higher copy-on-write amplification on snapshotted blobs. " +
+			"Cluster size is fixed at lvstore creation: this setting only affects newly registered Disks. " +
+			"Existing Disks keep their original cluster size, reported in Disk.status.clusterSize. " +
+			"Default 1 MiB (1048576) matches historical behavior; Mayastor defaults to 4 MiB (4194304) and " +
+			"recommends up to 32 MiB (33554432) for large pools. Must be a power-of-two multiple of the bdev " +
+			"block size (typically 4 KiB). SPDK stores the value in a uint32, so the hard ceiling is 4 GiB.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"1048576\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 65536,     // 64 KiB
+			ValueIntRangeMaximum: 268435456, // 256 MiB
 		},
 	}
 
