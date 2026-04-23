@@ -7,7 +7,7 @@ import (
 )
 
 func (p *Proxy) VolumeGet(e *longhorn.Engine) (volume *Volume, err error) {
-	recv, err := p.grpcClient.VolumeGet(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e))
+	recv, err := p.grpcClient.VolumeGet(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e))
 	if err != nil {
 		return nil, err
 	}
@@ -16,7 +16,7 @@ func (p *Proxy) VolumeGet(e *longhorn.Engine) (volume *Volume, err error) {
 }
 
 func (p *Proxy) VolumeExpand(e *longhorn.Engine) (err error) {
-	return p.grpcClient.VolumeExpand(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.VolumeExpand(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		e.Spec.VolumeSize)
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 func (p *Proxy) ReplicaAdd(e *longhorn.Engine, replicaName, replicaAddress string, restore, fastSync bool, localSync *etypes.FileLocalSync, replicaFileSyncHTTPClientTimeout, grpcTimeoutSeconds int64) (err error) {
-	return p.grpcClient.ReplicaAdd(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.ReplicaAdd(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		replicaName, replicaAddress, restore, e.Spec.VolumeSize, e.Status.CurrentSize,
 		int(replicaFileSyncHTTPClientTimeout), fastSync, localSync, grpcTimeoutSeconds)
 }
