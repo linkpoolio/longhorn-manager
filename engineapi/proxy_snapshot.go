@@ -10,7 +10,7 @@ import (
 
 func (p *Proxy) SnapshotCreate(e *longhorn.Engine, name string, labels map[string]string,
 	freezeFilesystem bool) (string, error) {
-	return p.grpcClient.VolumeSnapshot(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.VolumeSnapshot(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		name, labels, freezeFilesystem)
 }
 
@@ -58,7 +58,7 @@ func (p *Proxy) SnapshotCloneStatus(e *longhorn.Engine) (status map[string]*long
 }
 
 func (p *Proxy) SnapshotRevert(e *longhorn.Engine, snapshotName string) (err error) {
-	return p.grpcClient.SnapshotRevert(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.SnapshotRevert(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		snapshotName)
 }
 
@@ -72,12 +72,12 @@ func (p *Proxy) SnapshotPurge(e *longhorn.Engine) (err error) {
 		return errors.Errorf("failed to start snapshot purge for engine %v and volume %v because the volume is migrating", e.Name, e.Spec.VolumeName)
 	}
 
-	return p.grpcClient.SnapshotPurge(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.SnapshotPurge(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		true)
 }
 
 func (p *Proxy) SnapshotPurgeStatus(e *longhorn.Engine) (status map[string]*longhorn.PurgeStatus, err error) {
-	recv, err := p.grpcClient.SnapshotPurgeStatus(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName,
+	recv, err := p.grpcClient.SnapshotPurgeStatus(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName,
 		p.DirectToURL(e))
 	if err != nil {
 		return nil, err
@@ -91,7 +91,7 @@ func (p *Proxy) SnapshotPurgeStatus(e *longhorn.Engine) (status map[string]*long
 }
 
 func (p *Proxy) SnapshotDelete(e *longhorn.Engine, name string) (err error) {
-	return p.grpcClient.SnapshotRemove(string(e.Spec.DataEngine), e.Name, e.Spec.VolumeName, p.DirectToURL(e),
+	return p.grpcClient.SnapshotRemove(string(e.Spec.DataEngine), e.Name, e.Name, e.Spec.VolumeName, p.DirectToURL(e),
 		[]string{name})
 }
 
