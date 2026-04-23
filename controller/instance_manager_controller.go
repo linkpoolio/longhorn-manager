@@ -222,6 +222,11 @@ func (imc *InstanceManagerController) isResponsibleForSetting(obj interface{}) b
 
 	return types.SettingName(setting.Name) == types.SettingNameKubernetesClusterAutoscalerEnabled ||
 		types.SettingName(setting.Name) == types.SettingNameDataEngineCPUMask ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineReplicaCtrlrLossTimeoutSec ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineReplicaFastIOFailTimeoutSec ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineReplicaReconnectDelaySec ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineReplicaTransportAckTimeout ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineReplicaKeepAliveTimeoutMs ||
 		types.SettingName(setting.Name) == types.SettingNameOrphanResourceAutoDeletion
 }
 
@@ -789,6 +794,16 @@ func (imc *InstanceManagerController) areDangerZoneSettingsSyncedToIMPod(im *lon
 			}
 		case types.SettingNameDataEngineInterruptModeEnabled:
 			isSettingSynced, err = imc.isSettingInterruptModeEnabledSynced(setting, im)
+		case types.SettingNameDataEngineReplicaCtrlrLossTimeoutSec:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ReplicaCtrlrLossTimeoutSec)
+		case types.SettingNameDataEngineReplicaFastIOFailTimeoutSec:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ReplicaFastIOFailTimeoutSec)
+		case types.SettingNameDataEngineReplicaReconnectDelaySec:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ReplicaReconnectDelaySec)
+		case types.SettingNameDataEngineReplicaTransportAckTimeout:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ReplicaTransportAckTimeout)
+		case types.SettingNameDataEngineReplicaKeepAliveTimeoutMs:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ReplicaKeepAliveTimeoutMs)
 		}
 		if err != nil {
 			return false, false, false, err
@@ -938,6 +953,27 @@ func (imc *InstanceManagerController) isSettingInterruptModeEnabledSynced(settin
 	return im.Status.DataEngineStatus.V2.InterruptModeEnabled == effective, nil
 }
 
+func (imc *InstanceManagerController) isV2ReplicaTimeoutEnvSynced(im *longhorn.InstanceManager, pod *corev1.Pod, settingName types.SettingName, envName string) (bool, error) {
+	if types.IsDataEngineV1(im.Spec.DataEngine) {
+		return true, nil
+	}
+
+	desired, err := imc.ds.GetSettingValueExistedByDataEngine(settingName, im.Spec.DataEngine)
+	if err != nil {
+		return false, err
+	}
+
+	if len(pod.Spec.Containers) == 0 {
+		return false, nil
+	}
+	for _, env := range pod.Spec.Containers[0].Env {
+		if env.Name == envName {
+			return env.Value == desired, nil
+		}
+	}
+	return desired == "", nil
+}
+
 // getEffectiveSpdkInterruptMode resolves the SPDK interrupt-mode flag for a v2
 // InstanceManager with node-level overrides layered on top of the cluster
 // Setting. Precedence (highest first):
@@ -976,6 +1012,32 @@ func (imc *InstanceManagerController) getEffectiveSpdkCPUMask(im *longhorn.Insta
 		}
 	}
 	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
+}
+
+func (imc *InstanceManagerController) getV2ReplicaTimeoutEnv(dataEngine longhorn.DataEngineType) ([]corev1.EnvVar, error) {
+	pairs := []struct {
+		envName     string
+		settingName types.SettingName
+	}{
+		{types.EnvV2ReplicaCtrlrLossTimeoutSec, types.SettingNameDataEngineReplicaCtrlrLossTimeoutSec},
+		{types.EnvV2ReplicaFastIOFailTimeoutSec, types.SettingNameDataEngineReplicaFastIOFailTimeoutSec},
+		{types.EnvV2ReplicaReconnectDelaySec, types.SettingNameDataEngineReplicaReconnectDelaySec},
+		{types.EnvV2ReplicaTransportAckTimeout, types.SettingNameDataEngineReplicaTransportAckTimeout},
+		{types.EnvV2ReplicaKeepAliveTimeoutMs, types.SettingNameDataEngineReplicaKeepAliveTimeoutMs},
+	}
+
+	envs := make([]corev1.EnvVar, 0, len(pairs))
+	for _, p := range pairs {
+		value, err := imc.ds.GetSettingValueExistedByDataEngine(p.settingName, dataEngine)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get setting %v for data engine %v", p.settingName, dataEngine)
+		}
+		if value == "" {
+			continue
+		}
+		envs = append(envs, corev1.EnvVar{Name: p.envName, Value: value})
+	}
+	return envs, nil
 }
 
 func (imc *InstanceManagerController) syncInstanceManagerAPIVersion(im *longhorn.InstanceManager) error {
@@ -1842,6 +1904,13 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			Name:  types.EnvTZ,
 			Value: tz,
 		})
+	}
+	if types.IsDataEngineV2(dataEngine) {
+		v2Env, err := imc.getV2ReplicaTimeoutEnv(dataEngine)
+		if err != nil {
+			return nil, err
+		}
+		podEnv = append(podEnv, v2Env...)
 	}
 	podSpec.Spec.Containers[0].Env = podEnv
 

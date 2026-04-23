@@ -153,6 +153,11 @@ const (
 	SettingNameDataEngineLogLevel                                       = SettingName("data-engine-log-level")
 	SettingNameDataEngineLogFlags                                       = SettingName("data-engine-log-flags")
 	SettingNameDataEngineInterruptModeEnabled                           = SettingName("data-engine-interrupt-mode-enabled")
+	SettingNameDataEngineReplicaCtrlrLossTimeoutSec                     = SettingName("data-engine-replica-ctrlr-loss-timeout-sec")
+	SettingNameDataEngineReplicaFastIOFailTimeoutSec                    = SettingName("data-engine-replica-fast-io-fail-timeout-sec")
+	SettingNameDataEngineReplicaReconnectDelaySec                       = SettingName("data-engine-replica-reconnect-delay-sec")
+	SettingNameDataEngineReplicaTransportAckTimeout                     = SettingName("data-engine-replica-transport-ack-timeout")
+	SettingNameDataEngineReplicaKeepAliveTimeoutMs                      = SettingName("data-engine-replica-keep-alive-timeout-ms")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -274,6 +279,11 @@ var (
 		SettingNameDataEngineLogFlags,
 		SettingNameSnapshotDataIntegrity,
 		SettingNameDataEngineInterruptModeEnabled,
+		SettingNameDataEngineReplicaCtrlrLossTimeoutSec,
+		SettingNameDataEngineReplicaFastIOFailTimeoutSec,
+		SettingNameDataEngineReplicaReconnectDelaySec,
+		SettingNameDataEngineReplicaTransportAckTimeout,
+		SettingNameDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -433,6 +443,11 @@ var (
 		SettingNameDataEngineLogLevel:                                       SettingDefinitionDataEngineLogLevel,
 		SettingNameDataEngineLogFlags:                                       SettingDefinitionDataEngineLogFlags,
 		SettingNameDataEngineInterruptModeEnabled:                           SettingDefinitionDataEngineInterruptModeEnabled,
+		SettingNameDataEngineReplicaCtrlrLossTimeoutSec:                     SettingDefinitionDataEngineReplicaCtrlrLossTimeoutSec,
+		SettingNameDataEngineReplicaFastIOFailTimeoutSec:                    SettingDefinitionDataEngineReplicaFastIOFailTimeoutSec,
+		SettingNameDataEngineReplicaReconnectDelaySec:                       SettingDefinitionDataEngineReplicaReconnectDelaySec,
+		SettingNameDataEngineReplicaTransportAckTimeout:                     SettingDefinitionDataEngineReplicaTransportAckTimeout,
+		SettingNameDataEngineReplicaKeepAliveTimeoutMs:                      SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1786,6 +1801,77 @@ var (
 		ReadOnly:           false,
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"false\"}", longhorn.DataEngineTypeV2),
+	}
+
+	SettingDefinitionDataEngineReplicaCtrlrLossTimeoutSec = SettingDefinition{
+		DisplayName:        "Replica Controller Loss Timeout",
+		Description:        "Applies only to the V2 Data Engine. Seconds a V2 engine waits for a disconnected replica bdev_nvme controller to reconnect before giving up and removing the controller. Longer values increase recovery tolerance at the cost of slower failure detection.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"15\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+		},
+	}
+
+	SettingDefinitionDataEngineReplicaFastIOFailTimeoutSec = SettingDefinition{
+		DisplayName:        "Replica Fast I/O Fail Timeout",
+		Description:        "Applies only to the V2 Data Engine. Seconds after a replica bdev_nvme controller disconnects before in-flight I/O is failed back to the raid bdev. Must be less than the controller loss timeout.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"10\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+		},
+	}
+
+	SettingDefinitionDataEngineReplicaReconnectDelaySec = SettingDefinition{
+		DisplayName:        "Replica Reconnect Delay",
+		Description:        "Applies only to the V2 Data Engine. Seconds a V2 engine waits between reconnect attempts against a disconnected replica bdev_nvme controller.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"2\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+		},
+	}
+
+	SettingDefinitionDataEngineReplicaTransportAckTimeout = SettingDefinition{
+		DisplayName:        "Replica Transport ACK Timeout",
+		Description:        "Applies only to the V2 Data Engine. NVMe-oF transport ACK timeout for replica connections, expressed as a power-of-two exponent (timeout = 2^value * 1ms). SPDK requires the value to be in the range 0-31.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"10\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+			ValueIntRangeMaximum: 31,
+		},
+	}
+
+	SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs = SettingDefinition{
+		DisplayName:        "Replica Keep-Alive Timeout",
+		Description:        "Applies only to the V2 Data Engine. Milliseconds between NVMe-oF keep-alive probes the engine issues to each replica. Shorter values detect silent controller loss faster at the cost of more chatter.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"10000\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+		},
 	}
 
 	SettingDefinitionReplicaDiskSoftAntiAffinity = SettingDefinition{
