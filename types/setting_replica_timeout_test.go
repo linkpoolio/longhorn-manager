@@ -91,6 +91,17 @@ func (s *TestSuite) TestLvolClearMethodSettingShape(c *C) {
 	}
 }
 
+func (s *TestSuite) TestLvstoreClusterSizeSettingShape(c *C) {
+	def, ok := GetSettingDefinition(SettingNameDataEngineLvstoreClusterSize)
+	c.Assert(ok, Equals, true)
+	c.Assert(def.Type, Equals, SettingTypeInt)
+	c.Assert(def.DataEngineSpecific, Equals, true)
+	c.Assert(def.Category, Equals, SettingCategoryDangerZone)
+	c.Assert(def.Default, Equals, `{"v2":"1048576"}`)
+	c.Assert(def.ValueIntRange[ValueIntRangeMinimum], Equals, 65536)
+	c.Assert(def.ValueIntRange[ValueIntRangeMaximum], Equals, 268435456)
+}
+
 func (s *TestSuite) TestReplicaTimeoutEnvVarsDistinct(c *C) {
 	// The spdk-engine init() path reads five distinct env vars; a copy-paste
 	// error that collapses two into the same name would silently drop a

@@ -85,12 +85,13 @@ func (s *TestSuite) TestGetV2ReplicaTimeoutEnvEmitsAllFiveVars(c *C) {
 		types.SettingNameDataEngineReplicaTransportAckTimeout:  "12",
 		types.SettingNameDataEngineReplicaKeepAliveTimeoutMs:   "15000",
 		types.SettingNameDataEngineLvolClearMethod:             "none",
+		types.SettingNameDataEngineLvstoreClusterSize:          "4194304",
 	}
 	imc, _ := buildTimeoutTestController(c, values)
 
 	envs, err := imc.getV2ReplicaTimeoutEnv(longhorn.DataEngineTypeV2)
 	c.Assert(err, IsNil)
-	c.Assert(len(envs), Equals, 6)
+	c.Assert(len(envs), Equals, 7)
 
 	byName := map[string]string{}
 	for _, e := range envs {
@@ -102,6 +103,7 @@ func (s *TestSuite) TestGetV2ReplicaTimeoutEnvEmitsAllFiveVars(c *C) {
 	c.Assert(byName[types.EnvV2ReplicaTransportAckTimeout], Equals, "12")
 	c.Assert(byName[types.EnvV2ReplicaKeepAliveTimeoutMs], Equals, "15000")
 	c.Assert(byName[types.EnvV2LvolClearMethod], Equals, "none")
+	c.Assert(byName[types.EnvV2LvstoreClusterSize], Equals, "4194304")
 }
 
 // --- isV2ReplicaTimeoutEnvSynced ---
@@ -207,6 +209,7 @@ func (s *TestSuite) TestReplicaTimeoutSettingsRegisteredAsDangerZone(c *C) {
 	c.Assert(danger.Has(types.SettingNameDataEngineReplicaTransportAckTimeout), Equals, true)
 	c.Assert(danger.Has(types.SettingNameDataEngineReplicaKeepAliveTimeoutMs), Equals, true)
 	c.Assert(danger.Has(types.SettingNameDataEngineLvolClearMethod), Equals, true)
+	c.Assert(danger.Has(types.SettingNameDataEngineLvstoreClusterSize), Equals, true)
 }
 
 func (s *TestSuite) TestReplicaTimeoutSettingsHaveV2Defaults(c *C) {

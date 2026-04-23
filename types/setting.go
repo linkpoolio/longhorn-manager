@@ -159,6 +159,7 @@ const (
 	SettingNameDataEngineReplicaTransportAckTimeout                     = SettingName("data-engine-replica-transport-ack-timeout")
 	SettingNameDataEngineReplicaKeepAliveTimeoutMs                      = SettingName("data-engine-replica-keep-alive-timeout-ms")
 	SettingNameDataEngineLvolClearMethod                                = SettingName("data-engine-lvol-clear-method")
+	SettingNameDataEngineLvstoreClusterSize                             = SettingName("data-engine-lvstore-cluster-size")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -286,6 +287,7 @@ var (
 		SettingNameDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameDataEngineLvolClearMethod,
+		SettingNameDataEngineLvstoreClusterSize,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -451,6 +453,7 @@ var (
 		SettingNameDataEngineReplicaTransportAckTimeout:                     SettingDefinitionDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs:                      SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameDataEngineLvolClearMethod:                                SettingDefinitionDataEngineLvolClearMethod,
+		SettingNameDataEngineLvstoreClusterSize:                             SettingDefinitionDataEngineLvstoreClusterSize,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1890,6 +1893,28 @@ var (
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"\"}", longhorn.DataEngineTypeV2),
 		Choices:            []any{"", "none", "unmap", "write_zeroes"},
+	}
+
+	SettingDefinitionDataEngineLvstoreClusterSize = SettingDefinition{
+		DisplayName: "Lvstore Cluster Size",
+		Description: "Applies only to the V2 Data Engine. Size in bytes of each cluster in new SPDK lvstores. " +
+			"Larger clusters reduce the per-cluster blob metadata sync that caps v2 replica rebuild throughput " +
+			"(SPDK issue #359) at the cost of higher copy-on-write amplification on snapshotted blobs. " +
+			"Cluster size is fixed at lvstore creation: this setting only affects newly registered Disks. " +
+			"Existing Disks keep their original cluster size, reported in Disk.status.clusterSize. " +
+			"Default 1 MiB (1048576) matches historical behavior; Mayastor defaults to 4 MiB (4194304) and " +
+			"recommends up to 32 MiB (33554432) for large pools. Must be a power-of-two multiple of the bdev " +
+			"block size (typically 4 KiB). SPDK stores the value in a uint32, so the hard ceiling is 4 GiB.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"1048576\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 65536,     // 64 KiB
+			ValueIntRangeMaximum: 268435456, // 256 MiB
+		},
 	}
 
 	SettingDefinitionReplicaDiskSoftAntiAffinity = SettingDefinition{
