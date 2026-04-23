@@ -270,6 +270,15 @@ const (
 	EnvTZ             = "TZ"
 	EnvDistro         = "LONGHORN_DISTRO"
 
+	// V2 data-engine replica NVMe-oF tunables, exposed to the IM as env vars so
+	// the spdk-engine layer can read them at replica-attach time without a
+	// round-trip to the Longhorn datastore.
+	EnvV2ReplicaCtrlrLossTimeoutSec  = "LONGHORN_V2_REPLICA_CTRLR_LOSS_TIMEOUT_SEC"
+	EnvV2ReplicaFastIOFailTimeoutSec = "LONGHORN_V2_REPLICA_FAST_IO_FAIL_TIMEOUT_SEC"
+	EnvV2ReplicaReconnectDelaySec    = "LONGHORN_V2_REPLICA_RECONNECT_DELAY_SEC"
+	EnvV2ReplicaTransportAckTimeout  = "LONGHORN_V2_REPLICA_TRANSPORT_ACK_TIMEOUT"
+	EnvV2ReplicaKeepAliveTimeoutMs   = "LONGHORN_V2_REPLICA_KEEP_ALIVE_TIMEOUT_MS"
+
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"
 	BackupStoreTypeNFS    = "nfs"
