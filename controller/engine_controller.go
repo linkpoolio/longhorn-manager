@@ -68,14 +68,6 @@ var (
 	// number of consecutive actual size updates allowed during bursts
 	sizeUpdateBurst = 3
 
-	// staleReplicaAddressRecreateTimeout is the ReplicaModeERR dwell time
-	// after which a v2 engine with no endpoint is considered hung on stale
-	// replica addresses. SPDK's ctrlr_loss_timeout covers post-connect loss
-	// but not pre-connect RDMA rejects, so bdev_nvme controllers pinned to
-	// a replica port that has moved (e.g., the replica IM restarted and
-	// reallocated ports) will retry forever. Deleting the Engine CR lets
-	// the volume controller recreate the engine against the current
-	// Spec.ReplicaAddressMap, breaking the retry storm.
 	staleReplicaAddressRecreateTimeout = 2 * time.Minute
 )
 
@@ -830,20 +822,6 @@ func (m *EngineMonitor) sync() bool {
 	return false
 }
 
-// shouldRecreateStaleV2Engine decides whether a running v2 engine is stuck on
-// stale replica addresses and should be recreated. SPDK's bdev_nvme will
-// retry pre-connect RDMA/TCP rejects forever (ctrlr_loss_timeout only covers
-// post-connect loss), so if a replica IM restarts and reallocates ports the
-// engine's attached controller pins to a port that no longer serves that
-// subsystem. The engine then produces an error-log storm without ever
-// exiting on its own, and the volume never attaches.
-//
-// Heuristic: all replicas in ERR for longer than staleReplicaAddressRecreateTimeout
-// AND the engine still has no endpoint. Deleting the Engine CR triggers the
-// volume controller to recreate the engine against the current
-// Spec.ReplicaAddressMap, which re-issues bdev_nvme_attach_controller at the
-// replicas' live addresses. Pure function — time is passed in so tests can
-// drive the clock.
 func shouldRecreateStaleV2Engine(engine *longhorn.Engine, now time.Time) (bool, string) {
 	if engine == nil {
 		return false, ""
@@ -855,8 +833,6 @@ func shouldRecreateStaleV2Engine(engine *longhorn.Engine, now time.Time) (bool, 
 		return false, ""
 	}
 	if engine.Status.Endpoint != "" {
-		// The frontend is serving a block device; no recovery needed even if
-		// individual replicas transiently ERR.
 		return false, ""
 	}
 	if len(engine.Status.ReplicaModeMap) == 0 {
