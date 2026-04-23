@@ -69,6 +69,8 @@ type InstanceStatus struct {
 	Conditions             map[string]bool             `json:"conditions"`
 	PortStart              int32                       `json:"portStart"`
 	PortEnd                int32                       `json:"portEnd"`
+	TcpPort                int32                       `json:"tcpPort,omitempty"`
+	RdmaPort               int32                       `json:"rdmaPort,omitempty"`
 	TargetPortStart        int32                       `json:"targetPortStart"`
 	TargetPortEnd          int32                       `json:"targetPortEnd"`
 	StandbyTargetPortStart int32                       `json:"standbyTargetPortStart"`
@@ -113,6 +115,8 @@ func RPCToInstanceStatus(obj *rpc.InstanceStatus) InstanceStatus {
 		Conditions:             obj.Conditions,
 		PortStart:              obj.PortStart,
 		PortEnd:                obj.PortEnd,
+		TcpPort:                obj.TcpPort,
+		RdmaPort:               obj.RdmaPort,
 		TargetPortStart:        obj.TargetPortStart,
 		TargetPortEnd:          obj.TargetPortEnd,
 		StandbyTargetPortStart: obj.StandbyTargetPortStart,
