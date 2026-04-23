@@ -2363,16 +2363,21 @@ func (c *VolumeController) canInstanceManagerLaunchReplica(r *longhorn.Replica) 
 	if isNodeDownOrDeletedOrDelinquent {
 		return false, nil
 	}
-	// Replica already had IM
 	if r.Status.InstanceManagerName != "" {
 		replicaIM, err := c.ds.GetInstanceManagerRO(r.Status.InstanceManagerName)
 		if err != nil {
+			if datastore.ErrorIsNotFound(err) {
+				return false, nil
+			}
 			return false, errors.Wrapf(err, "failed to find instance manager %v for replica %v", r.Status.InstanceManagerName, r.Name)
 		}
 		return imInStartingOrRunningState(replicaIM), nil
 	}
 	defaultIM, err := c.ds.GetInstanceManagerByInstanceRO(r)
 	if err != nil {
+		if datastore.ErrorIsNotFound(err) || strings.Contains(err.Error(), "no running instance manager") {
+			return false, nil
+		}
 		return false, errors.Wrapf(err, "failed to find instance manager for replica %v", r.Name)
 	}
 	return imInStartingOrRunningState(defaultIM), nil
