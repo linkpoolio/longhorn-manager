@@ -1853,6 +1853,13 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 				},
 			},
 		}
+
+		// Allow SPDK enough time to flush its blobstore and clear the dirty
+		// bit on shutdown. Without this, kubelet SIGKILLs spdk_tgt mid-flush
+		// (default 30s grace), the blobstore stays marked dirty, and the
+		// next boot performs a full recovery (15-30 min on a multi-TiB disk).
+		// With clean shutdown the next boot skips recovery entirely.
+		podSpec.Spec.TerminationGracePeriodSeconds = ptr.To(int64(300))
 	} else {
 		podSpec.Spec.Containers[0].Args = []string{
 			"instance-manager", "--debug", "daemon", "--listen", fmt.Sprintf(":%d", engineapi.InstanceManagerProcessManagerServiceDefaultPort),
