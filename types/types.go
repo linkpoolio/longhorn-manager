@@ -278,6 +278,7 @@ const (
 	EnvV2ReplicaReconnectDelaySec    = "LONGHORN_V2_REPLICA_RECONNECT_DELAY_SEC"
 	EnvV2ReplicaTransportAckTimeout  = "LONGHORN_V2_REPLICA_TRANSPORT_ACK_TIMEOUT"
 	EnvV2ReplicaKeepAliveTimeoutMs   = "LONGHORN_V2_REPLICA_KEEP_ALIVE_TIMEOUT_MS"
+	EnvV2LvolClearMethod             = "LONGHORN_V2_LVOL_CLEAR_METHOD"
 
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"

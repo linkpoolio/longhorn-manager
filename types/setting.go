@@ -158,6 +158,7 @@ const (
 	SettingNameDataEngineReplicaReconnectDelaySec                       = SettingName("data-engine-replica-reconnect-delay-sec")
 	SettingNameDataEngineReplicaTransportAckTimeout                     = SettingName("data-engine-replica-transport-ack-timeout")
 	SettingNameDataEngineReplicaKeepAliveTimeoutMs                      = SettingName("data-engine-replica-keep-alive-timeout-ms")
+	SettingNameDataEngineLvolClearMethod                                = SettingName("data-engine-lvol-clear-method")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -284,6 +285,7 @@ var (
 		SettingNameDataEngineReplicaReconnectDelaySec,
 		SettingNameDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs,
+		SettingNameDataEngineLvolClearMethod,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -448,6 +450,7 @@ var (
 		SettingNameDataEngineReplicaReconnectDelaySec:                       SettingDefinitionDataEngineReplicaReconnectDelaySec,
 		SettingNameDataEngineReplicaTransportAckTimeout:                     SettingDefinitionDataEngineReplicaTransportAckTimeout,
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs:                      SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs,
+		SettingNameDataEngineLvolClearMethod:                                SettingDefinitionDataEngineLvolClearMethod,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1872,6 +1875,21 @@ var (
 		ValueIntRange: map[string]int{
 			ValueIntRangeMinimum: 0,
 		},
+	}
+
+	SettingDefinitionDataEngineLvolClearMethod = SettingDefinition{
+		DisplayName: "Lvol Clear Method",
+		Description: "Applies only to the V2 Data Engine. Controls the clear_method the engine passes to bdev_lvol_create. " +
+			"Blank means SPDK default (unmap). Use \"none\" when the underlying bdev (typically AIO on loop/LVM) " +
+			"services UNMAP via synchronous fallocate on the SPDK reactor, which can stall the RPC queue and trip " +
+			"the instance manager liveness probe. Use \"write_zeroes\" to explicitly zero freed clusters.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeString,
+		Required:           false,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"\"}", longhorn.DataEngineTypeV2),
+		Choices:            []any{"", "none", "unmap", "write_zeroes"},
 	}
 
 	SettingDefinitionReplicaDiskSoftAntiAffinity = SettingDefinition{
