@@ -193,6 +193,12 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 			}
 			status.Port = int(instance.Status.PortStart)
 		}
+		if status.TcpPort != int(instance.Status.TcpPort) {
+			status.TcpPort = int(instance.Status.TcpPort)
+		}
+		if status.RdmaPort != int(instance.Status.RdmaPort) {
+			status.RdmaPort = int(instance.Status.RdmaPort)
+		}
 		if status.UblkID != instance.Status.UblkID {
 			status.UblkID = instance.Status.UblkID
 		}

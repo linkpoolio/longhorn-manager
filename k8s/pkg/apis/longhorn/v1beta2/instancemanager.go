@@ -118,6 +118,16 @@ type InstanceStatus struct {
 	StorageIP string `json:"storageIP"`
 	// +optional
 	Port int `json:"port"`
+	// TcpPort is the replica's TCP NVMe-oF listener port. Equals Port on
+	// TCP-only storage nodes; equals Port+1 on storage nodes that also
+	// expose RDMA. Zero on v1 data engine or pre-dual-listener replicas;
+	// engine_controller falls back to Port in that case.
+	// +optional
+	TcpPort int `json:"tcpPort,omitempty"`
+	// RdmaPort is the replica's RDMA NVMe-oF listener port. Zero when the
+	// storage node has no RDMA capability or on v1 replicas.
+	// +optional
+	RdmaPort int `json:"rdmaPort,omitempty"`
 	// +optional
 	Starting bool `json:"starting"`
 	// +optional
@@ -149,6 +159,10 @@ type InstanceProcessStatus struct {
 	PortEnd int32 `json:"portEnd"`
 	// +optional
 	PortStart int32 `json:"portStart"`
+	// +optional
+	TcpPort int32 `json:"tcpPort,omitempty"`
+	// +optional
+	RdmaPort int32 `json:"rdmaPort,omitempty"`
 	// +optional
 	TargetPortEnd int32 `json:"targetPortEnd"`
 	// +optional

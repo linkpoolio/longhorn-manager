@@ -346,9 +346,11 @@ func (ec *EngineController) syncEngine(key string) (err error) {
 	} else if len(engine.Spec.UpgradedReplicaAddressMap) == 0 {
 		syncReplicaAddressMap = true
 	}
-	if syncReplicaAddressMap && !reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) {
+	if syncReplicaAddressMap && (!reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) ||
+		!reflect.DeepEqual(engine.Status.CurrentReplicaTransportAddressMap, engine.Spec.ReplicaTransportAddressMap)) {
 		log.Infof("Updating engine current replica address map to %+v", engine.Spec.ReplicaAddressMap)
 		engine.Status.CurrentReplicaAddressMap = engine.Spec.ReplicaAddressMap
+		engine.Status.CurrentReplicaTransportAddressMap = engine.Spec.ReplicaTransportAddressMap
 		// Make sure the CurrentReplicaAddressMap persist in the etcd before continue
 		return nil
 	}

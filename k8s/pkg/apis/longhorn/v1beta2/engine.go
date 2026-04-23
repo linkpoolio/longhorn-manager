@@ -10,6 +10,18 @@ const (
 	ReplicaModeERR = ReplicaMode("ERR")
 )
 
+// ReplicaTransportAddresses carries both transport-qualified NVMe-oF addresses
+// for a single replica so the engine can pick whichever transport matches its
+// own negotiated node transport at attach time. TcpAddress is always populated
+// on dual-listener-aware replicas; RdmaAddress is empty on TCP-only storage
+// nodes.
+type ReplicaTransportAddresses struct {
+	// +optional
+	TcpAddress string `json:"tcpAddress,omitempty"`
+	// +optional
+	RdmaAddress string `json:"rdmaAddress,omitempty"`
+}
+
 type EngineBackupStatus struct {
 	// +optional
 	Progress int `json:"progress"`
@@ -133,6 +145,14 @@ type EngineSpec struct {
 	UblkNumberOfQueue int `json:"ublkNumberOfQueue,omitempty"`
 	// +optional
 	ReplicaAddressMap map[string]string `json:"replicaAddressMap"`
+	// ReplicaTransportAddressMap carries transport-qualified addresses per
+	// replica so the engine picks the transport matching its own node
+	// transport (RDMA when supported, TCP otherwise) at attach time. Keyed by
+	// replica name with both tcp_address and (optionally) rdma_address per
+	// entry. Optional; when empty the engine falls back to the legacy
+	// replica_address_map with its own replicaTransport.
+	// +optional
+	ReplicaTransportAddressMap map[string]ReplicaTransportAddresses `json:"replicaTransportAddressMap,omitempty"`
 	// +optional
 	UpgradedReplicaAddressMap map[string]string `json:"upgradedReplicaAddressMap"`
 	// +optional
@@ -172,6 +192,14 @@ type EngineStatus struct {
 	// +optional
 	// +nullable
 	CurrentReplicaAddressMap map[string]string `json:"currentReplicaAddressMap"`
+	// CurrentReplicaTransportAddressMap is the transport-aware mirror of
+	// CurrentReplicaAddressMap. Synced from Spec.ReplicaTransportAddressMap
+	// and consumed by engineapi when creating the engine instance, so the
+	// engine can pick the transport matching its own node transport at
+	// attach time.
+	// +optional
+	// +nullable
+	CurrentReplicaTransportAddressMap map[string]ReplicaTransportAddresses `json:"currentReplicaTransportAddressMap,omitempty"`
 	// +optional
 	// +nullable
 	ReplicaModeMap map[string]ReplicaMode `json:"replicaModeMap"`

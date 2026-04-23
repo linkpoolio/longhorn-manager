@@ -2211,6 +2211,7 @@ func (c *VolumeController) openVolumeDependentResources(v *longhorn.Volume, e *l
 	}
 	e.Spec.NodeID = v.Spec.NodeID
 	e.Spec.ReplicaAddressMap = replicaAddressMap
+	e.Spec.ReplicaTransportAddressMap = buildReplicaTransportAddressMap(rs, replicaAddressMap)
 	e.Spec.DesireState = longhorn.InstanceStateRunning
 	// The volume may be activated
 	e.Spec.DisableFrontend = v.Status.FrontendDisabled
@@ -4839,6 +4840,7 @@ func (c *VolumeController) prepareReplicasAndEngineForMigration(v *longhorn.Volu
 			log.Warn("The current available migration replicas do not match the record in the migration engine status, will restart the migration engine then update the replica map")
 			migrationEngine.Spec.NodeID = ""
 			migrationEngine.Spec.ReplicaAddressMap = map[string]string{}
+			migrationEngine.Spec.ReplicaTransportAddressMap = nil
 			migrationEngine.Spec.DesireState = longhorn.InstanceStateStopped
 			return false, false, nil
 		}
@@ -4850,6 +4852,7 @@ func (c *VolumeController) prepareReplicasAndEngineForMigration(v *longhorn.Volu
 
 	migrationEngine.Spec.NodeID = v.Spec.MigrationNodeID
 	migrationEngine.Spec.ReplicaAddressMap = replicaAddressMap
+	migrationEngine.Spec.ReplicaTransportAddressMap = buildReplicaTransportAddressMap(rs, replicaAddressMap)
 	migrationEngine.Spec.DesireState = longhorn.InstanceStateRunning
 
 	if migrationEngine.Status.CurrentState != longhorn.InstanceStateRunning {
@@ -5446,4 +5449,39 @@ func (c *VolumeController) syncVolumeOnDemandSnapshotStatus(v *longhorn.Volume, 
 	// All relevant snapshots have at least one checksum, and we have fresh results where possible. Acknowledge this request.
 	v.Status.LastOnDemandSnapshotHashingCompleteAt = v.Spec.SnapshotHashingRequestedAt
 	return nil
+}
+
+// buildReplicaTransportAddressMap builds the transport-qualified address map
+// that the engine uses to pick the matching transport per replica. Keyed the
+// same as replicaAddressMap (only includes replicas that are in it) so each
+// entry pairs a TcpAddress and, when the storage node exposes RDMA, an
+// RdmaAddress. Returns nil when nothing would be added so engine.Spec stays
+// minimal on v1 volumes and in rolling-upgrade windows where replica statuses
+// predate the new port fields.
+func buildReplicaTransportAddressMap(rs map[string]*longhorn.Replica, replicaAddressMap map[string]string) map[string]longhorn.ReplicaTransportAddresses {
+	if len(replicaAddressMap) == 0 {
+		return nil
+	}
+	out := map[string]longhorn.ReplicaTransportAddresses{}
+	for name := range replicaAddressMap {
+		r, ok := rs[name]
+		if !ok || r == nil {
+			continue
+		}
+		if r.Status.TcpPort == 0 && r.Status.RdmaPort == 0 {
+			continue
+		}
+		entry := longhorn.ReplicaTransportAddresses{}
+		if r.Status.TcpPort != 0 {
+			entry.TcpAddress = imutil.GetURL(r.Status.StorageIP, r.Status.TcpPort)
+		}
+		if r.Status.RdmaPort != 0 {
+			entry.RdmaAddress = imutil.GetURL(r.Status.StorageIP, r.Status.RdmaPort)
+		}
+		out[name] = entry
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

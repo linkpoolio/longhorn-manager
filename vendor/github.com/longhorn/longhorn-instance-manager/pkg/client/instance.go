@@ -89,13 +89,18 @@ func NewInstanceServiceClientWithTLS(ctx context.Context, ctxCancel context.Canc
 
 type EngineCreateRequest struct {
 	ReplicaAddressMap map[string]string
-	Frontend          string
-	UblkQueueDepth    int
-	UblkNumberOfQueue int
-	InitiatorAddress  string
-	TargetAddress     string
-	UpgradeRequired   bool
-	SalvageRequested  bool
+	// ReplicaTransportAddressMap carries transport-qualified addresses for each
+	// replica so the engine can pick whichever transport matches its own node
+	// transport at attach time. Optional; empty map causes the engine to fall
+	// back to ReplicaAddressMap dialed with the engine's replicaTransport.
+	ReplicaTransportAddressMap map[string]*rpc.ReplicaTransportAddresses
+	Frontend                   string
+	UblkQueueDepth             int
+	UblkNumberOfQueue          int
+	InitiatorAddress           string
+	TargetAddress              string
+	UpgradeRequired            bool
+	SalvageRequested           bool
 }
 
 type EngineFrontendCreateRequest struct {
@@ -159,12 +164,13 @@ func (c *InstanceServiceClient) InstanceCreate(req *InstanceCreateRequest) (*api
 		switch req.InstanceType {
 		case types.InstanceTypeEngine:
 			spdkInstanceSpec = &rpc.SpdkInstanceSpec{
-				Size:              req.Size,
-				ReplicaAddressMap: req.Engine.ReplicaAddressMap,
-				Frontend:          req.Engine.Frontend,
-				SalvageRequested:  req.Engine.SalvageRequested,
-				UblkQueueDepth:    int32(req.Engine.UblkQueueDepth),
-				UblkNumberOfQueue: int32(req.Engine.UblkNumberOfQueue),
+				Size:                       req.Size,
+				ReplicaAddressMap:          req.Engine.ReplicaAddressMap,
+				ReplicaTransportAddressMap: req.Engine.ReplicaTransportAddressMap,
+				Frontend:                   req.Engine.Frontend,
+				SalvageRequested:           req.Engine.SalvageRequested,
+				UblkQueueDepth:             int32(req.Engine.UblkQueueDepth),
+				UblkNumberOfQueue:          int32(req.Engine.UblkNumberOfQueue),
 			}
 		case types.InstanceTypeEngineFrontend:
 			spdkInstanceSpec = &rpc.SpdkInstanceSpec{
