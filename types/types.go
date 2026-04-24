@@ -142,6 +142,7 @@ const (
 	NodeNvmfTransportLabelValueRDMA           = "rdma"
 	NodeSpdkInterruptModeLabelKey             = "node.longhorn.io/spdk-interrupt-mode"
 	NodeSpdkCPUMaskLabelKey                   = "node.longhorn.io/spdk-cpu-mask"
+	NodeSpdkMemorySizeLabelKey                = "node.longhorn.io/spdk-memory-size"
 	KubeNodeDefaultDiskConfigAnnotationKey    = "node.longhorn.io/default-disks-config"
 	KubeNodeDefaultNodeTagConfigAnnotationKey = "node.longhorn.io/default-node-tags"
 

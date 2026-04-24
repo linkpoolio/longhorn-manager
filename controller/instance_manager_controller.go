@@ -1023,6 +1023,28 @@ func (imc *InstanceManagerController) getEffectiveSpdkCPUMask(im *longhorn.Insta
 	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
 }
 
+// getEffectiveSpdkMemorySize resolves the SPDK hugepage budget (in MiB) for
+// a v2 InstanceManager. Precedence (highest first):
+//  1. node.longhorn.io/spdk-memory-size label on the kube node (decimal MiB,
+//     e.g. "16384" for a 16 GiB hugepage reservation — required on storage
+//     nodes where the blobstore cluster size forces large DMA buffers).
+//  2. The cluster-wide data-engine-memory-size Setting.
+//
+// Engine-only v2 IMs (no local disks) typically run on workers with a small
+// hugepage reservation and rely on the cluster Setting. Storage-bearing
+// workers should be labeled with a larger value to avoid
+// "DMA allocation for cluster of size = ... failed" under CoW / rebuild.
+func (imc *InstanceManagerController) getEffectiveSpdkMemorySize(im *longhorn.InstanceManager) (int64, error) {
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if v, ok := kubeNode.Labels[types.NodeSpdkMemorySizeLabelKey]; ok && v != "" {
+			if parsed, perr := strconv.ParseInt(strings.TrimSpace(v), 10, 64); perr == nil && parsed > 0 {
+				return parsed, nil
+			}
+		}
+	}
+	return imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+}
+
 func (imc *InstanceManagerController) getV2ReplicaTimeoutEnv(dataEngine longhorn.DataEngineType) ([]corev1.EnvVar, error) {
 	pairs := []struct {
 		envName     string
@@ -1805,8 +1827,7 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			return nil, err
 		}
 
-		memory := int64(0)
-		memory, err = imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+		memory, err := imc.getEffectiveSpdkMemorySize(im)
 		if err != nil {
 			return nil, err
 		}
