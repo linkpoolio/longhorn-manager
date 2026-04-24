@@ -160,6 +160,7 @@ const (
 	SettingNameDataEngineReplicaKeepAliveTimeoutMs                      = SettingName("data-engine-replica-keep-alive-timeout-ms")
 	SettingNameDataEngineLvolClearMethod                                = SettingName("data-engine-lvol-clear-method")
 	SettingNameDataEngineLvstoreClusterSize                             = SettingName("data-engine-lvstore-cluster-size")
+	SettingNameDataEngineLvolThinProvision                              = SettingName("data-engine-lvol-thin-provision")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -288,6 +289,7 @@ var (
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameDataEngineLvolClearMethod,
 		SettingNameDataEngineLvstoreClusterSize,
+		SettingNameDataEngineLvolThinProvision,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -454,6 +456,7 @@ var (
 		SettingNameDataEngineReplicaKeepAliveTimeoutMs:                      SettingDefinitionDataEngineReplicaKeepAliveTimeoutMs,
 		SettingNameDataEngineLvolClearMethod:                                SettingDefinitionDataEngineLvolClearMethod,
 		SettingNameDataEngineLvstoreClusterSize:                             SettingDefinitionDataEngineLvstoreClusterSize,
+		SettingNameDataEngineLvolThinProvision:                              SettingDefinitionDataEngineLvolThinProvision,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1893,6 +1896,23 @@ var (
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"\"}", longhorn.DataEngineTypeV2),
 		Choices:            []any{"", "none", "unmap", "write_zeroes"},
+	}
+
+	SettingDefinitionDataEngineLvolThinProvision = SettingDefinition{
+		DisplayName: "Lvol Thin Provision",
+		Description: "Applies only to the V2 Data Engine. Controls whether new lvols are created with thin provisioning. " +
+			"true (default) allocates clusters lazily on first write, which triggers a per-cluster blob metadata sync " +
+			"barrier that can cap first-write throughput (e.g. mkfs on a fresh large volume, or shallow_copy during " +
+			"rebuild — see SPDK issue #359). Set to false on installs where the underlying bdev is already thick-" +
+			"allocated (e.g. a fixed-size LVM LV) so the blobstore-level thin tracking adds no capacity savings and " +
+			"only contributes latency. Changing this setting only affects newly created lvols; existing blobs keep " +
+			"their original thin/thick state.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeBool,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"true\"}", longhorn.DataEngineTypeV2),
 	}
 
 	SettingDefinitionDataEngineLvstoreClusterSize = SettingDefinition{

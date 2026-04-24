@@ -280,6 +280,7 @@ const (
 	EnvV2ReplicaKeepAliveTimeoutMs   = "LONGHORN_V2_REPLICA_KEEP_ALIVE_TIMEOUT_MS"
 	EnvV2LvolClearMethod             = "LONGHORN_V2_LVOL_CLEAR_METHOD"
 	EnvV2LvstoreClusterSize          = "LONGHORN_V2_LVSTORE_CLUSTER_SIZE"
+	EnvV2LvolThinProvision           = "LONGHORN_V2_LVOL_THIN_PROVISION"
 
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"
