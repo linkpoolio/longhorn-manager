@@ -1087,11 +1087,10 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 		if err != nil {
 			return errors.Wrap(err, "failed to create instance manager client for v2 QoS update")
 		}
+		defer imClient.Close()
 		if err := imClient.EngineInstanceSetQosLimit(engine, engine.Spec.QosLimits); err != nil {
-			imClient.Close()
 			return errors.Wrap(err, "failed to apply v2 QoS limits")
 		}
-		imClient.Close()
 		if engine.Spec.QosLimits == nil {
 			engine.Status.LastAppliedQosLimits = nil
 		} else {

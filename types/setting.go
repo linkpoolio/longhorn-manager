@@ -2449,12 +2449,10 @@ func SetSettingDefinition(name SettingName, definition SettingDefinition) {
 }
 
 func GetDangerZoneSettings() sets.Set[SettingName] {
-	// Take the read lock — settingDefinitions is mutated by
-	// SetSettingDefinition (which takes the write lock) and iterating it
-	// here without the read lock has produced "concurrent map iteration
-	// and map write" fatal panics in production (longhorn-manager
-	// reconcile loops calling GetDangerZoneSettings while a setting
-	// definition update was in flight).
+	// settingDefinitions is mutated by SetSettingDefinition under the write
+	// lock; iterating without the read lock can produce a "concurrent map
+	// iteration and map write" fatal panic when a controller goroutine
+	// hits this function while a setting definition update is in flight.
 	settingDefinitionsLock.RLock()
 	defer settingDefinitionsLock.RUnlock()
 
