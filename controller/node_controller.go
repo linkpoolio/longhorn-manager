@@ -1113,6 +1113,32 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 		}
 	}
 
+	// If the underlying kube node is unschedulable (cordoned, e.g. mid-drain),
+	// defer ALL IM cleanup decisions until the node is back schedulable. The
+	// cordon is a signal that kubelet is about to evict pods on this node;
+	// kubelet's eviction respects pod terminationGracePeriodSeconds and runs
+	// preStop, which is how the v2 IM cleanly drains NVMe-oF listeners and
+	// exits SPDK. If we delete IM CRs here, we cascade to a redundant
+	// pods.Delete that races kubelet's eviction — and historically that race
+	// has skipped preStop entirely, leaving SPDK abruptly killed and replicas
+	// in inconsistent state (observed 2026-04-26 ma5-worker-9 drain test:
+	// 800ms cordon-to-IM-CR-deletion, no preStop output in Loki, all replicas
+	// went running→error→stopped within ~1s).
+	//
+	// The post-cordon flow we want is: drain evicts → preStop runs cleanly
+	// → SPDK shuts down gracefully → pod terminates. Once the pod is gone,
+	// the next sync sees no pod and orphan IM CRs get cleaned up then. New
+	// IMs are created when the node is uncordoned and v2 instances need to
+	// be scheduled on it again.
+	kubeNode, err := nc.ds.GetKubernetesNodeRO(node.Name)
+	if err != nil && !datastore.ErrorIsNotFound(err) {
+		return err
+	}
+	if kubeNode != nil && kubeNode.Spec.Unschedulable {
+		log.Debugf("Skipping IM cleanup on unschedulable node %v; deferring to kubelet drain + preStop", node.Name)
+		return nil
+	}
+
 	imTypeDataEngines := nc.getImTypeDataEngines(node)
 
 	for imType, dataEngines := range imTypeDataEngines {
