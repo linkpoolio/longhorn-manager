@@ -295,36 +295,30 @@ func getVolumeOptions(volumeID string, volOptions map[string]string) (*longhornc
 	vol.Frontend = volOptions["frontend"]
 
 	// QoS limits — engine-level cap on aggregate raid bdev I/O (v2 only).
-	// Each parameter is independent; any combination may be set, all
-	// non-negative. Zero or absent means unlimited for that bucket.
+	// Each parameter is independent; any combination may be set. Zero or
+	// absent means unlimited for that bucket.
 	qos := &longhornclient.QosLimits{}
-	if v, ok := volOptions["qosRwIops"]; ok {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return nil, errors.Wrap(err, "invalid parameter qosRwIops")
+	for _, p := range []struct {
+		key string
+		dst *int64
+	}{
+		{"qosRwIops", &qos.RwIOsPerSec},
+		{"qosRwMBps", &qos.RwMBPerSec},
+		{"qosReadMBps", &qos.RMBPerSec},
+		{"qosWriteMBps", &qos.WMBPerSec},
+	} {
+		v, ok := volOptions[p.key]
+		if !ok {
+			continue
 		}
-		qos.RwIOsPerSec = n
-	}
-	if v, ok := volOptions["qosRwMBps"]; ok {
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return nil, errors.Wrap(err, "invalid parameter qosRwMBps")
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid parameter %s: %q", p.key, v)
 		}
-		qos.RwMBPerSec = n
-	}
-	if v, ok := volOptions["qosReadMBps"]; ok {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return nil, errors.Wrap(err, "invalid parameter qosReadMBps")
+		if n < 0 {
+			return nil, fmt.Errorf("invalid parameter %s: must be non-negative, got %d", p.key, n)
 		}
-		qos.RMBPerSec = n
-	}
-	if v, ok := volOptions["qosWriteMBps"]; ok {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return nil, errors.Wrap(err, "invalid parameter qosWriteMBps")
-		}
-		qos.WMBPerSec = n
+		*p.dst = n
 	}
 	if qos.RwIOsPerSec != 0 || qos.RwMBPerSec != 0 || qos.RMBPerSec != 0 || qos.WMBPerSec != 0 {
 		vol.QosLimits = qos
