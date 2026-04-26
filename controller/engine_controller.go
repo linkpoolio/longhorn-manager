@@ -53,7 +53,7 @@ const (
 )
 
 var (
-	EnginePollInterval = 5 * time.Second
+	EnginePollInterval = 2 * time.Second
 	EnginePollTimeout  = 30 * time.Second
 
 	EngineMonitorConflictRetryCount = 5
