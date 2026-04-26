@@ -1672,7 +1672,14 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 		}
 
 		if e.Status.CurrentState == longhorn.InstanceStateError {
-			if v.Status.CurrentNodeID != "" || (v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached) {
+			// During a deliberate detach (Spec.NodeID cleared, state in
+			// detaching/detached) the engine instance briefly reports Error
+			// while it tears down. That isn't an unexpected death — skip the
+			// fault so we don't flag the volume + emit DetachedUnexpectedly.
+			isDeliberateDetach := v.Spec.NodeID == "" &&
+				(v.Status.State == longhorn.VolumeStateDetaching ||
+					v.Status.State == longhorn.VolumeStateDetached)
+			if !isDeliberateDetach && (v.Status.CurrentNodeID != "" || (v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)) {
 				log.Warn("Engine of volume dead unexpectedly, setting v.Status.Robustness to faulted")
 				msg := fmt.Sprintf("Engine of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
 				c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
