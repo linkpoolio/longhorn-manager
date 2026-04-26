@@ -1951,26 +1951,6 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			return nil, err
 		}
 		podEnv = append(podEnv, v2Env...)
-
-		// Kill-switch the IM-side derived-state reconcilers. The current
-		// EngineFrontend heal is destructive against live consumers (it
-		// recreates dm-linear and /dev/longhorn/X under mounted filesystems,
-		// causing XFS shutdown — observed 2026-04-26 on rustfs /data) and
-		// triggers spuriously on transient kernel NVMe-oF controller state
-		// transitions (live → connecting → live during keep-alive blips that
-		// the kernel itself recovers from within seconds). Until the probe is
-		// rewritten to be state-machine-aware and consumer-aware, the
-		// reconcilers are off — manager-driven RPCs remain authoritative.
-		podEnv = append(podEnv,
-			corev1.EnvVar{
-				Name:  "LONGHORN_V2_RECONCILE_ENGINE_FRONTENDS",
-				Value: "0",
-			},
-			corev1.EnvVar{
-				Name:  "LONGHORN_V2_RECONCILE_REPLICAS",
-				Value: "0",
-			},
-		)
 	}
 	podSpec.Spec.Containers[0].Env = podEnv
 
