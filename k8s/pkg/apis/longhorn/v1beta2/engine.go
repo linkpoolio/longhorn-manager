@@ -257,6 +257,12 @@ type EngineStatus struct {
 	// concurrently during a single replica rebuild.
 	// It is determined by the global setting or the volume spec field with the same name.
 	RebuildConcurrentSyncLimit int `json:"rebuildConcurrentSyncLimit,omitempty"`
+
+	// LastAppliedQosLimits records the QosLimits last pushed to the v2 engine
+	// instance via SPDK bdev_set_qos_limit. Compared against Spec.QosLimits in
+	// the engine controller to drive live updates without recreating the engine.
+	// +optional
+	LastAppliedQosLimits *QosLimits `json:"lastAppliedQosLimits,omitempty"`
 }
 
 // +genclient
