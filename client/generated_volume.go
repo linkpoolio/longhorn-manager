@@ -85,6 +85,8 @@ type Volume struct {
 
 	ReplicaRebuildingBandwidthLimit int64 `json:"replicaRebuildingBandwidthLimit,omitempty" yaml:"replica_rebuilding_bandwidth_limit,omitempty"`
 
+	QosLimits *QosLimits `json:"qosLimits,omitempty" yaml:"qos_limits,omitempty"`
+
 	ReplicaSoftAntiAffinity string `json:"replicaSoftAntiAffinity,omitempty" yaml:"replica_soft_anti_affinity,omitempty"`
 
 	ReplicaZoneSoftAntiAffinity string `json:"replicaZoneSoftAntiAffinity,omitempty" yaml:"replica_zone_soft_anti_affinity,omitempty"`

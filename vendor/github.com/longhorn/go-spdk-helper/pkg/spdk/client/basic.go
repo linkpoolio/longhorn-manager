@@ -1121,12 +1121,20 @@ func (c *Client) BdevNvmeGetControllerHealthInfo(name string) (healthInfo spdkty
 //
 // "keepAliveTimeoutMs": Keep alive timeout in milliseconds.
 func (c *Client) BdevNvmeSetOptions(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs int32) (result bool, err error) {
+	return c.BdevNvmeSetOptionsWithTos(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs, 0)
+}
+
+// BdevNvmeSetOptionsWithTos extends BdevNvmeSetOptions with transport_tos,
+// used to tag outbound NVMe-oF packets (DSCP 26 = AF31 for PFC / RoCEv2
+// lossless traffic class).
+func (c *Client) BdevNvmeSetOptionsWithTos(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs, transportTos int32) (result bool, err error) {
 	req := spdktypes.BdevNvmeSetOptionsRequest{
 		CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
 		ReconnectDelaySec:    reconnectDelaySec,
 		FastIOFailTimeoutSec: fastIOFailTimeoutSec,
 		TransportAckTimeout:  transportAckTimeout,
 		KeepAliveTimeoutMs:   keepAliveTimeoutMs,
+		TransportTos:         transportTos,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_nvme_set_options", req)
@@ -1170,15 +1178,24 @@ func (c *Client) BdevNvmeGet(name string, timeout uint64) (bdevNvmeInfoList []sp
 	return bdevNvmeInfoList, nil
 }
 
-// NvmfCreateTransport initializes an NVMe-oF transport with the given options.
+// NvmfCreateTransport initializes an NVMe-oF transport with only a trtype.
+// Kept as-is for backwards compat and for callers that want SPDK defaults.
 //
 //	"trtype": Required. Transport type, "tcp" or "rdma". "tcp" by default.
 func (c *Client) NvmfCreateTransport(trtype spdktypes.NvmeTransportType) (created bool, err error) {
 	if trtype == "" {
 		trtype = spdktypes.NvmeTransportTypeTCP
 	}
-	req := spdktypes.NvmfCreateTransportRequest{
-		Trtype: trtype,
+	return c.NvmfCreateTransportWithOpts(spdktypes.NvmfCreateTransportRequest{Trtype: trtype})
+}
+
+// NvmfCreateTransportWithOpts creates an NVMe-oF transport with fully
+// specified opts. Use this for RDMA to set data_wr_pool_size, num_shared_buffers,
+// buf_cache_size etc. — the SPDK defaults for those are pathological on high
+// throughput NICs.
+func (c *Client) NvmfCreateTransportWithOpts(req spdktypes.NvmfCreateTransportRequest) (created bool, err error) {
+	if req.Trtype == "" {
+		req.Trtype = spdktypes.NvmeTransportTypeTCP
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("nvmf_create_transport", req)
@@ -1187,6 +1204,92 @@ func (c *Client) NvmfCreateTransport(trtype spdktypes.NvmeTransportType) (create
 	}
 
 	return created, json.Unmarshal(cmdOutput, &created)
+}
+
+// FrameworkStartInit tells spdk_tgt (started with --wait-for-rpc) to proceed
+// with subsystem initialisation. The paired pattern is:
+//
+//  1. spdk_tgt --wait-for-rpc starts and exposes the RPC socket but doesn't
+//     init subsystems
+//  2. caller sends iobuf_set_options / bdev_nvme_set_options / ... to tune
+//     anything that must be configured before init
+//  3. caller sends framework_start_init — spdk_tgt initialises subsystems
+//     with the tuned opts
+//
+// Without --wait-for-rpc this RPC is a no-op (subsystems are already up).
+func (c *Client) FrameworkStartInit() (result bool, err error) {
+	cmdOutput, err := c.jsonCli.SendCommand("framework_start_init", nil)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
+// FrameworkWaitInit blocks until SPDK reports subsystem init is complete.
+// Useful after FrameworkStartInit so callers don't race disk/bdev creation
+// against subsystem init.
+func (c *Client) FrameworkWaitInit() (result bool, err error) {
+	cmdOutput, err := c.jsonCli.SendCommand("framework_wait_init", nil)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
+// IobufSetOptions configures the global SPDK iobuf pool used by all subsystems
+// (accel, bdev, nvmf, etc). Must be called before any iobuf consumer
+// initialises its channels; otherwise returns "option not permitted" or
+// leaves consumers with empty caches.
+//
+// Default SPDK sizes (large_pool_count=1024, small_pool_count=8192) are not
+// enough once nvmf transport opts are tuned — a single nvmf transport with
+// num_shared_buffers=4095 + buf_cache_size=64 per poll group exceeds the
+// large pool and accel fails to create its channel with -ENOMEM.
+func (c *Client) IobufSetOptions(smallPoolCount, largePoolCount uint64, smallBufsizeKB, largeBufsizeKB uint32) (result bool, err error) {
+	req := map[string]interface{}{}
+	if smallPoolCount > 0 {
+		req["small_pool_count"] = smallPoolCount
+	}
+	if largePoolCount > 0 {
+		req["large_pool_count"] = largePoolCount
+	}
+	if smallBufsizeKB > 0 {
+		req["small_bufsize"] = smallBufsizeKB * 1024
+	}
+	if largeBufsizeKB > 0 {
+		req["large_bufsize"] = largeBufsizeKB * 1024
+	}
+	cmdOutput, err := c.jsonCli.SendCommand("iobuf_set_options", req)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
+// Mlx5ScanAccelModule registers the accel_mlx5 driver and assigns ops (copy,
+// crc32c, etc) to it instead of the software fallback. Must be called during
+// the --wait-for-rpc window (before framework_start_init); SPDK rejects it
+// later with "Method may only be called before framework is initialized".
+//
+// Without this, NVMe-RDMA's UMR-per-IO path (cec5ba284) that "expects accel
+// to register UMR for the data buffer" falls through to sw_accel CPU memcpy,
+// which serializes on the reactor and adds significant per-op latency over
+// RDMA. With it, accel_mlx5 registers UMRs via libmlx5 direct verbs.
+//
+// numRequests sizes the per-device mkey pool. Default in SPDK is 2047 which
+// can fail with ENOMEM during signature-mkey alloc on some firmware. Pass
+// a smaller value (e.g. 256, must be >= cores * 16) when the default fails.
+// 0 means "use SPDK default".
+func (c *Client) Mlx5ScanAccelModule(numRequests uint32) (result bool, err error) {
+	req := map[string]interface{}{}
+	if numRequests > 0 {
+		req["num_requests"] = numRequests
+	}
+	cmdOutput, err := c.jsonCli.SendCommand("mlx5_scan_accel_module", req)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
 }
 
 // NvmfGetTransports lists all transports if no parameters specified.

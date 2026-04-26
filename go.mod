@@ -21,10 +21,10 @@ toolchain go1.26.1
 
 replace (
 	github.com/henrygd/beszel => github.com/longhorn/beszel v0.16.2-0.20260114090315-332709c32c7d
-	github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.0.0-20260423162726-93d868dbfe8e
-	github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v0.0.0-20260423180103-19b71c73d7b2
-	github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260423175421-6665e7b3d052
-	github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260423173434-e6daaeb4d4f4
+	github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260425145436-8c64226a8d15
+	github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v0.0.0-20260426101215-3a8fe6cba8f4
+	github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260426095417-cbae4873dbc6
+	github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260426100954-ba149dfb887b
 	k8s.io/api => k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.3
 	k8s.io/apimachinery => k8s.io/apimachinery v0.35.3

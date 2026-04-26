@@ -2218,6 +2218,10 @@ func (c *VolumeController) openVolumeDependentResources(v *longhorn.Volume, e *l
 	e.Spec.Frontend = v.Spec.Frontend
 	e.Spec.UblkQueueDepth = v.Spec.UblkQueueDepth
 	e.Spec.UblkNumberOfQueue = v.Spec.UblkNumberOfQueue
+	// QosLimits propagated to engine; engine controller forwards to spdk
+	// engine via gRPC at create time, and on subsequent live updates by
+	// calling EngineSetQosLimit when the spec changes.
+	e.Spec.QosLimits = v.Spec.QosLimits
 
 	return nil
 }
