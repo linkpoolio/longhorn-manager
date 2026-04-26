@@ -37,7 +37,7 @@ import (
 const (
 	// we wait 1m30s for the volume state polling, this leaves 20s for the rest of the function call
 	timeoutAttachDetach         = 90 * time.Second
-	tickAttachDetach            = 2 * time.Second
+	tickAttachDetach            = 500 * time.Millisecond
 	timeoutBackupControllerSync = 30 * time.Second
 	tickBackupControllerSync    = 2 * time.Second
 	backupStateCompleted        = "Completed"

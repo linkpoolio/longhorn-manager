@@ -1013,6 +1013,19 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 			if err := engineClientProxy.VolumeFrontendStart(engine); err != nil {
 				return errors.Wrapf(err, "failed to start frontend %v", engine.Spec.Frontend)
 			}
+			// Re-fetch volume info so the endpoint lands on engine.Status this
+			// sync rather than waiting another EnginePollInterval. Otherwise
+			// the CSI publishVolume wait sees an attached-but-no-endpoint
+			// engine for a full 5s tick after the frontend is already up.
+			volumeInfo, err = engineClientProxy.VolumeGet(engine)
+			if err != nil {
+				return err
+			}
+			endpoint, err = engineapi.GetEngineEndpoint(volumeInfo, engine.Status.IP)
+			if err != nil {
+				return err
+			}
+			engine.Status.Endpoint = endpoint
 		}
 
 		// The rebuild failure will be handled by ec.startRebuilding()
