@@ -38,6 +38,10 @@ const (
 	// we wait 1m30s for the volume state polling, this leaves 20s for the rest of the function call
 	timeoutAttachDetach         = 90 * time.Second
 	tickAttachDetach            = 500 * time.Millisecond
+	// timeoutVolumeReady caps the inline wait for a volume to flip Ready=true
+	// when the previous attachment is still detaching. Bounded so we don't
+	// block indefinitely on truly faulted/restoring volumes.
+	timeoutVolumeReady          = 15 * time.Second
 	timeoutBackupControllerSync = 30 * time.Second
 	tickBackupControllerSync    = 2 * time.Second
 	backupStateCompleted        = "Completed"
@@ -548,7 +552,15 @@ func (cs *ControllerServer) ControllerPublishVolume(ctx context.Context, req *cs
 	//  Most of the readiness conditions are covered by the attach, except auto attachment which requires changes to the design
 	//  should be handled by the processing of the api return codes
 	if !volume.Ready {
-		return nil, status.Errorf(codes.Aborted, "volume %s is not ready for workloads", volumeID)
+		// Common case: the previous pod's attachment ticket has just been
+		// removed (Spec.NodeID cleared), but engine/replicas haven't finished
+		// stopping yet so Status.State is still detaching. IsVolumeReady gates
+		// on this. Poll briefly so a quick detach doesn't force external-attacher
+		// into exponential backoff.
+		volume = cs.waitForVolumeReady(volumeID)
+		if volume == nil || !volume.Ready {
+			return nil, status.Errorf(codes.Aborted, "volume %s is not ready for workloads", volumeID)
+		}
 	}
 
 	attachmentID := generateAttachmentID(volumeID, nodeID)
@@ -1455,6 +1467,37 @@ func (cs *ControllerServer) waitForVolumeState(volumeID string, stateDescription
 			}
 			if predicate(existVol) {
 				return true
+			}
+		}
+	}
+}
+
+// waitForVolumeReady polls the volume up to timeoutVolumeReady waiting for
+// IsVolumeReady to flip true (typically because a detach-in-progress finishes).
+// Returns the latest volume snapshot, or nil if the lookup itself failed.
+func (cs *ControllerServer) waitForVolumeReady(volumeID string) *longhornclient.Volume {
+	log := cs.log.WithFields(logrus.Fields{"function": "waitForVolumeReady"})
+	timer := time.NewTimer(timeoutVolumeReady)
+	defer timer.Stop()
+	ticker := time.NewTicker(tickAttachDetach)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			log.Warnf("Timeout waiting for volume %s to become ready", volumeID)
+			vol, _ := cs.apiClient.Volume.ById(volumeID)
+			return vol
+		case <-ticker.C:
+			vol, err := cs.apiClient.Volume.ById(volumeID)
+			if err != nil {
+				log.WithError(err).Warnf("Failed to get volume %s while waiting for ready", volumeID)
+				continue
+			}
+			if vol == nil {
+				return nil
+			}
+			if vol.Ready {
+				return vol
 			}
 		}
 	}
