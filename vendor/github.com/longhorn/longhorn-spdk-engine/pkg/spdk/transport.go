@@ -58,15 +58,72 @@ func DetectTransport() TransportCapability {
 	return TransportCapability{}
 }
 
+// Tunables for nvmf_create_transport, all overridable via env. Defaults are:
+//
+//   MaxQueueDepth=128   — SPDK upstream default. Lower values (e.g. 32) were
+//   previously used to mitigate burst saturation that turned out to be caused
+//   by NIC adaptive interrupt coalescing + sw_accel data-buffer copy on the
+//   reactor; with adaptive coalescing off + accel_mlx5 registered for HW UMR,
+//   128 is safe and gives the headroom needed for high-IOPS workloads
+//   (16 cores × 128 = 2048 inflight commands per controller, vs only 512 at
+//   depth=32). Tune via LONGHORN_V2_NVMF_RDMA_MAX_QUEUE_DEPTH if needed.
+//
+//   data_wr_pool_size=4095 — critical. SPDK default of 0 forces per-qpair
+//   RDMA WR allocation on every submission and caps throughput at hundreds
+//   of KB/s. Mayastor uses 4095. Override with
+//   LONGHORN_V2_NVMF_RDMA_DATA_WR_POOL_SIZE.
+//
+// IoUnitSize=8192 is the SPDK-defined RDMA minimum; SPDK chains larger I/Os.
+// MaxIoSize=131072 matches kernel's max_hw_sectors_kb.
+var (
+	nvmfRdmaOpts = spdktypes.NvmfCreateTransportRequest{
+		Trtype:              spdktypes.NvmeTransportTypeRDMA,
+		MaxQueueDepth:       uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_MAX_QUEUE_DEPTH", 128)),
+		MaxIoQpairsPerCtrlr: uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_MAX_IO_QPAIRS_PER_CTRLR", 127)),
+		InCapsuleDataSize:   uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_IN_CAPSULE_DATA_SIZE", 4096)),
+		MaxIoSize:           uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_MAX_IO_SIZE", 131072)),
+		IoUnitSize:          uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_IO_UNIT_SIZE", 8192)),
+		MaxAqDepth:          uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_MAX_AQ_DEPTH", 128)),
+		NumSharedBuffers:    uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_NUM_SHARED_BUFFERS", 4095)),
+		BufCacheSize:        uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_BUF_CACHE_SIZE", 64)),
+		Zcopy:               boolPtr(true),
+		DataWrPoolSize:      uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_DATA_WR_POOL_SIZE", 4095)),
+		AcceptorPollRate:    uint32(envIntOrDefault("LONGHORN_V2_NVMF_RDMA_ACCEPTOR_POLL_RATE", 10000)),
+	}
+	nvmfTcpOpts = spdktypes.NvmfCreateTransportRequest{
+		Trtype:              spdktypes.NvmeTransportTypeTCP,
+		MaxQueueDepth:       128,
+		MaxIoQpairsPerCtrlr: 127,
+		InCapsuleDataSize:   4096,
+		MaxIoSize:           131072,
+		IoUnitSize:          131072,
+		MaxAqDepth:          128,
+		NumSharedBuffers:    2047,
+		BufCacheSize:        64,
+		Zcopy:               boolPtr(true),
+		AcceptorPollRate:    10000,
+	}
+)
+
+func boolPtr(b bool) *bool { return &b }
+
 func NegotiateNodeTransport(spdkClient *spdkclient.Client) NvmfTransportType {
+	// Pre-create TCP with opts so on-demand ensureNvmfTransport calls later
+	// pick it up as already-existing and skip the bare NvmfCreateTransport
+	// (which would use pathological defaults).
+	if _, err := spdkClient.NvmfCreateTransportWithOpts(nvmfTcpOpts); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
+		logrus.WithError(err).Warn("Failed to create NVMe-oF TCP transport with explicit opts; will fall back to SPDK defaults")
+	} else {
+		logrus.Info("NVMe-oF TCP transport created with tuned opts")
+	}
 	if !DetectTransport().RDMA {
 		return NvmfTransportTCP
 	}
-	if _, err := spdkClient.NvmfCreateTransport(spdktypes.NvmeTransportTypeRDMA); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
+	if _, err := spdkClient.NvmfCreateTransportWithOpts(nvmfRdmaOpts); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
 		logrus.WithError(err).Warn("SPDK rejected nvmf_create_transport(rdma); falling back to TCP for NVMe-oF")
 		return NvmfTransportTCP
 	}
-	logrus.Info("NVMe-oF RDMA transport negotiated on this node")
+	logrus.Info("NVMe-oF RDMA transport negotiated on this node with tuned opts")
 	return NvmfTransportRDMA
 }
 
@@ -87,7 +144,7 @@ func StartTransportReprobe(ctx context.Context, spdkClient *spdkclient.Client, n
 				if !DetectTransport().RDMA {
 					continue
 				}
-				if _, err := spdkClient.NvmfCreateTransport(spdktypes.NvmeTransportTypeRDMA); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
+				if _, err := spdkClient.NvmfCreateTransportWithOpts(nvmfRdmaOpts); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
 					continue
 				}
 				if rdmaReprobeLogged.CompareAndSwap(false, true) {

@@ -356,6 +356,33 @@ type VolumeSpec struct {
 	// If SnapshotHashingRequestedAt differs from LastOnDemandSnapshotHashingCompleteAt, it indicates that a hashing request
 	// is still in progress, and a new request will be rejected.
 	SnapshotHashingRequestedAt string `json:"snapshotHashingRequestedAt,omitempty"` // +optional
+
+	// QosLimits caps aggregate raid bdev I/O for v2 volumes via SPDK's
+	// bdev_set_qos_limit on the engine's raid bdev. Mapped 1:1 to SPDK
+	// parameters. All-zero (or nil) means unlimited (the default). Rebuild
+	// traffic — which goes engine→replica directly via NVMe-oF rather than
+	// through the raid bdev — is not subject to this cap.
+	// Currently v2 only; v1 ignores QosLimits.
+	// +optional
+	QosLimits *QosLimits `json:"qosLimits,omitempty"`
+}
+
+// QosLimits maps to SPDK's bdev_set_qos_limit parameters one-to-one. SPDK
+// enforces each as a separate token bucket; clients can mix-and-match
+// (e.g. cap aggregate IOPS but only writes for bandwidth).
+type QosLimits struct {
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RwIOsPerSec int64 `json:"rwIOsPerSec,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RwMBPerSec int64 `json:"rwMBPerSec,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RMBPerSec int64 `json:"rMBPerSec,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	WMBPerSec int64 `json:"wMBPerSec,omitempty"`
 }
 
 // VolumeStatus defines the observed state of the Longhorn volume

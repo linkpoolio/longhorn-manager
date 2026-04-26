@@ -539,6 +539,7 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 			InitiatorAddress:           req.InitiatorAddress,
 			TargetAddress:              req.TargetAddress,
 			SalvageRequested:           req.Engine.Spec.SalvageRequested,
+			QosLimits:                  longhornQosLimitsToIMRPC(req.Engine.Spec.QosLimits),
 		},
 	})
 
@@ -853,4 +854,21 @@ func (c *InstanceManagerClient) LogSetFlags(dataEngine longhorn.DataEngineType, 
 	}
 
 	return c.instanceServiceGrpcClient.LogSetFlags(string(dataEngine), component, flags)
+}
+
+// longhornQosLimitsToIMRPC converts the QosLimits CRD field to the imrpc
+// wire shape used by InstanceCreate. nil-in / nil-out so the engine sees no
+// cap when QoS isn't configured. Two structurally identical types in
+// different packages — split because longhorn-manager's CRDs and the IM's
+// proto types are owned by different repos.
+func longhornQosLimitsToIMRPC(in *longhorn.QosLimits) *imrpc.QosLimits {
+	if in == nil {
+		return nil
+	}
+	return &imrpc.QosLimits{
+		RwIosPerSec: in.RwIOsPerSec,
+		RwMbPerSec:  in.RwMBPerSec,
+		RMbPerSec:   in.RMBPerSec,
+		WMbPerSec:   in.WMBPerSec,
+	}
 }

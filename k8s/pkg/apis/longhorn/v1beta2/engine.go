@@ -181,6 +181,12 @@ type EngineSpec struct {
 	// concurrently during a single replica rebuild.
 	// It is determined by the global setting or the volume spec field with the same name.
 	RebuildConcurrentSyncLimit int `json:"rebuildConcurrentSyncLimit,omitempty"`
+
+	// QosLimits caps aggregate raid bdev I/O for v2 engines via SPDK's
+	// bdev_set_qos_limit. Propagated by the volume controller from
+	// VolumeSpec.QosLimits. nil / all-zero means unlimited.
+	// +optional
+	QosLimits *QosLimits `json:"qosLimits,omitempty"`
 }
 
 // EngineStatus defines the observed state of the Longhorn engine

@@ -101,6 +101,11 @@ type EngineCreateRequest struct {
 	TargetAddress              string
 	UpgradeRequired            bool
 	SalvageRequested           bool
+	// QosLimits caps aggregate raid bdev I/O for this engine. Mapped into
+	// imrpc.SpdkInstanceSpec.qos_limits which the IM forwards to the
+	// spdk-engine via spdkrpc.EngineCreateRequest. All-zero / nil means
+	// unlimited (the default).
+	QosLimits *rpc.QosLimits
 }
 
 type EngineFrontendCreateRequest struct {
@@ -171,6 +176,7 @@ func (c *InstanceServiceClient) InstanceCreate(req *InstanceCreateRequest) (*api
 				SalvageRequested:           req.Engine.SalvageRequested,
 				UblkQueueDepth:             int32(req.Engine.UblkQueueDepth),
 				UblkNumberOfQueue:          int32(req.Engine.UblkNumberOfQueue),
+				QosLimits:                  req.Engine.QosLimits,
 			}
 		case types.InstanceTypeEngineFrontend:
 			spdkInstanceSpec = &rpc.SpdkInstanceSpec{
