@@ -143,6 +143,7 @@ const (
 	NodeSpdkInterruptModeLabelKey             = "node.longhorn.io/spdk-interrupt-mode"
 	NodeSpdkCPUMaskLabelKey                   = "node.longhorn.io/spdk-cpu-mask"
 	NodeSpdkMemorySizeLabelKey                = "node.longhorn.io/spdk-memory-size"
+	NodeV2InstanceManagerCPURequestLabelKey   = "node.longhorn.io/v2-im-cpu-request"
 	KubeNodeDefaultDiskConfigAnnotationKey    = "node.longhorn.io/default-disks-config"
 	KubeNodeDefaultNodeTagConfigAnnotationKey = "node.longhorn.io/default-node-tags"
 

@@ -258,7 +258,21 @@ func GetInstanceManagerCPURequirement(ds *datastore.DataStore, imName string) (*
 
 	cpuRequest := 0
 	switch im.Spec.DataEngine {
-	case longhorn.DataEngineTypeV1, longhorn.DataEngineTypeV2:
+	case longhorn.DataEngineTypeV2:
+		// Per-node v2 IM CPU request override via kube node label, e.g.
+		// node.longhorn.io/v2-im-cpu-request=4 (cores) or =4000m (millicores).
+		// Empty/unset falls through to the InstanceManagerCPURequest field
+		// and then to the percentage setting.
+		if v, ok := kubeNode.Labels[types.NodeV2InstanceManagerCPURequestLabelKey]; ok && v != "" {
+			q, err := resource.ParseQuantity(v)
+			if err != nil {
+				return nil, errors.Wrapf(err, "invalid %s label value %q on node %s", types.NodeV2InstanceManagerCPURequestLabelKey, v, im.Spec.NodeID)
+			}
+			cpuRequest = int(q.MilliValue())
+			break
+		}
+		fallthrough
+	case longhorn.DataEngineTypeV1:
 		// TODO: Currently lhNode.Spec.InstanceManagerCPURequest is applied to both v1 and v2 data engines.
 		// In the future, we may want to support different CPU requests for them.
 		cpuRequest = lhNode.Spec.InstanceManagerCPURequest
