@@ -283,6 +283,7 @@ const (
 	EnvV2LvolClearMethod             = "LONGHORN_V2_LVOL_CLEAR_METHOD"
 	EnvV2LvstoreClusterSize          = "LONGHORN_V2_LVSTORE_CLUSTER_SIZE"
 	EnvV2LvolThinProvision           = "LONGHORN_V2_LVOL_THIN_PROVISION"
+	EnvV2ShallowCopyPipelineDepth    = "LONGHORN_V2_SHALLOW_COPY_PIPELINE_DEPTH"
 
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"

@@ -230,6 +230,7 @@ func (imc *InstanceManagerController) isResponsibleForSetting(obj interface{}) b
 		types.SettingName(setting.Name) == types.SettingNameDataEngineLvolClearMethod ||
 		types.SettingName(setting.Name) == types.SettingNameDataEngineLvstoreClusterSize ||
 		types.SettingName(setting.Name) == types.SettingNameDataEngineLvolThinProvision ||
+		types.SettingName(setting.Name) == types.SettingNameDataEngineShallowCopyPipelineDepth ||
 		types.SettingName(setting.Name) == types.SettingNameOrphanResourceAutoDeletion
 }
 
@@ -813,6 +814,8 @@ func (imc *InstanceManagerController) areDangerZoneSettingsSyncedToIMPod(im *lon
 			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2LvstoreClusterSize)
 		case types.SettingNameDataEngineLvolThinProvision:
 			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2LvolThinProvision)
+		case types.SettingNameDataEngineShallowCopyPipelineDepth:
+			isSettingSynced, err = imc.isV2ReplicaTimeoutEnvSynced(im, pod, settingName, types.EnvV2ShallowCopyPipelineDepth)
 		}
 		if err != nil {
 			return false, false, false, err
@@ -1058,6 +1061,7 @@ func (imc *InstanceManagerController) getV2ReplicaTimeoutEnv(dataEngine longhorn
 		{types.EnvV2LvolClearMethod, types.SettingNameDataEngineLvolClearMethod},
 		{types.EnvV2LvstoreClusterSize, types.SettingNameDataEngineLvstoreClusterSize},
 		{types.EnvV2LvolThinProvision, types.SettingNameDataEngineLvolThinProvision},
+		{types.EnvV2ShallowCopyPipelineDepth, types.SettingNameDataEngineShallowCopyPipelineDepth},
 	}
 
 	envs := make([]corev1.EnvVar, 0, len(pairs))

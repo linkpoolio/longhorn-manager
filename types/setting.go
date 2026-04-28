@@ -161,6 +161,7 @@ const (
 	SettingNameDataEngineLvolClearMethod                                = SettingName("data-engine-lvol-clear-method")
 	SettingNameDataEngineLvstoreClusterSize                             = SettingName("data-engine-lvstore-cluster-size")
 	SettingNameDataEngineLvolThinProvision                              = SettingName("data-engine-lvol-thin-provision")
+	SettingNameDataEngineShallowCopyPipelineDepth                       = SettingName("data-engine-shallow-copy-pipeline-depth")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -290,6 +291,7 @@ var (
 		SettingNameDataEngineLvolClearMethod,
 		SettingNameDataEngineLvstoreClusterSize,
 		SettingNameDataEngineLvolThinProvision,
+		SettingNameDataEngineShallowCopyPipelineDepth,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -457,6 +459,7 @@ var (
 		SettingNameDataEngineLvolClearMethod:                                SettingDefinitionDataEngineLvolClearMethod,
 		SettingNameDataEngineLvstoreClusterSize:                             SettingDefinitionDataEngineLvstoreClusterSize,
 		SettingNameDataEngineLvolThinProvision:                              SettingDefinitionDataEngineLvolThinProvision,
+		SettingNameDataEngineShallowCopyPipelineDepth:                       SettingDefinitionDataEngineShallowCopyPipelineDepth,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1913,6 +1916,23 @@ var (
 		ReadOnly:           false,
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"true\"}", longhorn.DataEngineTypeV2),
+	}
+
+	SettingDefinitionDataEngineShallowCopyPipelineDepth = SettingDefinition{
+		DisplayName: "Shallow Copy Pipeline Depth",
+		Description: "Applies only to the V2 Data Engine. Maximum number of clusters in flight on the source side of " +
+			"a shallow_copy (used during replica rebuild). depth=1 (default) preserves the upstream strict-serial " +
+			"walker — one cluster_sz read+write in flight at a time. Higher depths let the walker issue multiple " +
+			"cluster_sz I/Os concurrently, removing the QD=1 ceiling that caps rebuild throughput on fast networks. " +
+			"Peak source-side memory per active rebuild is depth*cluster_sz (e.g. depth=4 with 256 MiB clusters = " +
+			"1 GiB per rebuild), so the safe ceiling depends on hugepage budget and the per-node concurrent rebuild " +
+			"limit. Setting changes apply on the next IM pod restart.",
+		Category:           SettingCategoryDangerZone,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"1\"}", longhorn.DataEngineTypeV2),
 	}
 
 	SettingDefinitionDataEngineLvstoreClusterSize = SettingDefinition{
