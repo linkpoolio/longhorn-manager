@@ -292,6 +292,36 @@ func getVolumeOptions(volumeID string, volOptions map[string]string) (*longhornc
 
 	vol.Frontend = volOptions["frontend"]
 
+	// QoS limits — engine-level cap on aggregate raid bdev I/O (v2 only).
+	// Each parameter is independent; any combination may be set. Zero or
+	// absent means unlimited for that bucket.
+	qos := &longhornclient.QosLimits{}
+	for _, p := range []struct {
+		key string
+		dst *int64
+	}{
+		{"qosRwIops", &qos.RwIOsPerSec},
+		{"qosRwMBps", &qos.RwMBPerSec},
+		{"qosReadMBps", &qos.RMBPerSec},
+		{"qosWriteMBps", &qos.WMBPerSec},
+	} {
+		v, ok := volOptions[p.key]
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, errors.Wrapf(err, "invalid parameter %s: %q", p.key, v)
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("invalid parameter %s: must be non-negative, got %d", p.key, n)
+		}
+		*p.dst = n
+	}
+	if qos.RwIOsPerSec != 0 || qos.RwMBPerSec != 0 || qos.RMBPerSec != 0 || qos.WMBPerSec != 0 {
+		vol.QosLimits = qos
+	}
+
 	return vol, nil
 }
 

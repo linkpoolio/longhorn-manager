@@ -193,6 +193,12 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 			}
 			status.Port = int(instance.Status.PortStart)
 		}
+		if status.TcpPort != int(instance.Status.TcpPort) {
+			status.TcpPort = int(instance.Status.TcpPort)
+		}
+		if status.RdmaPort != int(instance.Status.RdmaPort) {
+			status.RdmaPort = int(instance.Status.RdmaPort)
+		}
 		if status.UblkID != instance.Status.UblkID {
 			status.UblkID = instance.Status.UblkID
 		}
@@ -372,6 +378,15 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 	}
 	if im != nil {
 		log = log.WithFields(logrus.Fields{"instanceManager": im.Name})
+		// If the IM CR was deleted and recreated (e.g. after an image bump
+		// or a node-side cleanup), the instance's status still references
+		// the old IM by name. ReconcileInstanceManager has already resolved
+		// the current IM via the disk lookup; sync the status field so
+		// downstream reconcilers don't follow a dangling pointer.
+		if status.InstanceManagerName != "" && status.InstanceManagerName != im.Name {
+			log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
+			status.InstanceManagerName = im.Name
+		}
 	}
 
 	if spec.LogRequested {

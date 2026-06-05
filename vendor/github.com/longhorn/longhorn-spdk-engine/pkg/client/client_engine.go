@@ -14,15 +14,19 @@ import (
 )
 
 // EngineCreate creates and starts an engine instance with the requested replicas.
-func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, portCount int32, salvageRequested bool, snapshotMaxCount int32) (*api.Engine, error) {
+// replicaTransportAddressMap is optional and carries transport-qualified
+// (tcp/rdma) addresses per replica; when populated the engine picks the
+// listener matching its own node transport, else it falls back to
+// replicaAddressMap dialed with the engine's default transport.
+func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize uint64, replicaAddressMap map[string]string, replicaTransportAddressMap map[string]*spdkrpc.ReplicaTransportAddresses, portCount int32, salvageRequested bool, snapshotMaxCount int32, qosLimits *spdkrpc.QosLimits) (*api.Engine, error) {
 	if name == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter name")
 	}
 	if volumeName == "" {
 		return nil, fmt.Errorf("failed to start engine: missing required parameter volumeName")
 	}
-	if len(replicaAddressMap) == 0 {
-		return nil, fmt.Errorf("failed to start engine: missing required parameter replicaAddressMap")
+	if len(replicaAddressMap) == 0 && len(replicaTransportAddressMap) == 0 {
+		return nil, fmt.Errorf("failed to start engine: missing required parameter replicaAddressMap or replicaTransportAddressMap")
 	}
 
 	client := c.getSPDKServiceClient()
@@ -30,14 +34,16 @@ func (c *SPDKClient) EngineCreate(name, volumeName, frontend string, specSize ui
 	defer cancel()
 
 	resp, err := client.EngineCreate(ctx, &spdkrpc.EngineCreateRequest{
-		Name:              name,
-		VolumeName:        volumeName,
-		Frontend:          frontend,
-		SpecSize:          specSize,
-		ReplicaAddressMap: replicaAddressMap,
-		PortCount:         portCount,
-		SalvageRequested:  salvageRequested,
-		SnapshotMaxCount:  snapshotMaxCount,
+		Name:                       name,
+		VolumeName:                 volumeName,
+		Frontend:                   frontend,
+		SpecSize:                   specSize,
+		ReplicaAddressMap:          replicaAddressMap,
+		ReplicaTransportAddressMap: replicaTransportAddressMap,
+		PortCount:                  portCount,
+		SalvageRequested:           salvageRequested,
+		SnapshotMaxCount:           snapshotMaxCount,
+		QosLimits:                  qosLimits,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to start engine")
@@ -489,4 +495,23 @@ func (c *SPDKClient) EngineRestoreStatus(engineName string) (*spdkrpc.RestoreSta
 	return client.EngineRestoreStatus(ctx, &spdkrpc.RestoreStatusRequest{
 		EngineName: engineName,
 	})
+}
+
+func (c *SPDKClient) EngineSetQosLimit(name string, qosLimits *spdkrpc.QosLimits) error {
+	if name == "" {
+		return fmt.Errorf("failed to set engine QoS: missing required parameter name")
+	}
+	if qosLimits == nil {
+		return fmt.Errorf("failed to set engine QoS: missing required parameter qosLimits (use all-zero fields for unlimited)")
+	}
+
+	client := c.getSPDKServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.EngineSetQosLimit(ctx, &spdkrpc.EngineSetQosLimitRequest{
+		Name:      name,
+		QosLimits: qosLimits,
+	})
+	return errors.Wrapf(err, "failed to set QoS on engine %v", name)
 }

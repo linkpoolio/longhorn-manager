@@ -140,6 +140,13 @@ const (
 	NodeCreateDefaultDiskLabelValueConfig     = "config"
 	NodeDisableV2DataEngineLabelKey           = "node.longhorn.io/disable-v2-data-engine"
 	NodeDisableV2DataEngineLabelKeyTrue       = "true"
+	NodeNvmfTransportLabelKey                 = "node.longhorn.io/nvmf-transport"
+	NodeNvmfTransportLabelValueTCP            = "tcp"
+	NodeNvmfTransportLabelValueRDMA           = "rdma"
+	NodeSpdkInterruptModeLabelKey             = "node.longhorn.io/spdk-interrupt-mode"
+	NodeSpdkCPUMaskLabelKey                   = "node.longhorn.io/spdk-cpu-mask"
+	NodeSpdkMemorySizeLabelKey                = "node.longhorn.io/spdk-memory-size"
+	NodeV2InstanceManagerCPURequestLabelKey   = "node.longhorn.io/v2-im-cpu-request"
 	KubeNodeDefaultDiskConfigAnnotationKey    = "node.longhorn.io/default-disks-config"
 	KubeNodeDefaultNodeTagConfigAnnotationKey = "node.longhorn.io/default-node-tags"
 
@@ -271,6 +278,18 @@ const (
 	EnvDataEngine     = "DATA_ENGINE"
 	EnvTZ             = "TZ"
 	EnvDistro         = "LONGHORN_DISTRO"
+
+	// V2 data-engine replica NVMe-oF tunables, exposed to the IM as env vars so
+	// the spdk-engine layer can read them at replica-attach time without a
+	// round-trip to the Longhorn datastore.
+	EnvV2ReplicaCtrlrLossTimeoutSec  = "LONGHORN_V2_REPLICA_CTRLR_LOSS_TIMEOUT_SEC"
+	EnvV2ReplicaFastIOFailTimeoutSec = "LONGHORN_V2_REPLICA_FAST_IO_FAIL_TIMEOUT_SEC"
+	EnvV2ReplicaReconnectDelaySec    = "LONGHORN_V2_REPLICA_RECONNECT_DELAY_SEC"
+	EnvV2ReplicaTransportAckTimeout  = "LONGHORN_V2_REPLICA_TRANSPORT_ACK_TIMEOUT"
+	EnvV2ReplicaKeepAliveTimeoutMs   = "LONGHORN_V2_REPLICA_KEEP_ALIVE_TIMEOUT_MS"
+	EnvV2LvolClearMethod             = "LONGHORN_V2_LVOL_CLEAR_METHOD"
+	EnvV2LvstoreClusterSize          = "LONGHORN_V2_LVSTORE_CLUSTER_SIZE"
+	EnvV2LvolThinProvision           = "LONGHORN_V2_LVOL_THIN_PROVISION"
 
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"

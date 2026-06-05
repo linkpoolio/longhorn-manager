@@ -38,14 +38,25 @@ func (s *Server) EngineCreate(ctx context.Context, req *spdkrpc.EngineCreateRequ
 	}
 
 	if e == nil {
-		s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount)
+		s.engineMap[req.Name] = NewEngine(req.Name, req.VolumeName, req.Frontend, req.SpecSize, s.nodeTransport, s.updateChs[types.InstanceTypeEngine], req.SnapshotMaxCount)
 		e = s.engineMap[req.Name]
+		// Wire on-disk persistence so engine state survives an IM restart,
+		// mirroring how EngineFrontendCreate sets ef.metadataDir.
+		e.metadataDir = s.metadataDir
+		if req.QosLimits != nil {
+			e.QosLimits = QosLimits{
+				RwIOsPerSec: req.QosLimits.RwIosPerSec,
+				RwMBPerSec:  req.QosLimits.RwMbPerSec,
+				RMBPerSec:   req.QosLimits.RMbPerSec,
+				WMBPerSec:   req.QosLimits.WMbPerSec,
+			}
+		}
 	}
 
 	spdkClient := s.spdkClient
 	s.Unlock()
 
-	return e.Create(spdkClient, req.ReplicaAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested)
+	return e.Create(spdkClient, req.ReplicaAddressMap, req.ReplicaTransportAddressMap, req.PortCount, s.portAllocator, req.SalvageRequested)
 }
 
 func (s *Server) EngineSnapshotMaxCountSet(ctx context.Context, req *spdkrpc.EngineSnapshotMaxCountSetRequest) (ret *emptypb.Empty, err error) {
@@ -68,8 +79,8 @@ func (s *Server) EngineSnapshotMaxCountSet(ctx context.Context, req *spdkrpc.Eng
 // EngineDelete deletes an engine
 func (s *Server) EngineDelete(ctx context.Context, req *spdkrpc.EngineDeleteRequest) (ret *emptypb.Empty, err error) {
 	s.RLock()
-	e := s.engineMap[req.Name]
 	spdkClient := s.spdkClient
+	e := s.engineMap[req.Name]
 	s.RUnlock()
 
 	defer func() {
@@ -175,13 +186,18 @@ func (s *Server) EngineFrontendSwitchOver(ctx context.Context, req *spdkrpc.Engi
 			ef = frontend
 		}
 	}
-	spdkClient := s.spdkClient
 	s.RUnlock()
 
 	if ef == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine frontend or engine %v for target switchover", req.Name)
 	}
 
+	unlockVolumeHost := s.acquireVolumeHostLock(ef.VolumeName)
+	defer unlockVolumeHost()
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	s.RUnlock()
 	if err := ef.SwitchOverTarget(spdkClient, req.EngineName, req.TargetAddress, req.SwitchoverPhase); err != nil {
 		return nil, toSwitchOverGRPCError(err, "failed to switch over target for %s", req.Name)
 	}
@@ -261,7 +277,7 @@ func (s *Server) EngineList(ctx context.Context, req *emptypb.Empty) (*spdkrpc.E
 
 // EngineWatch returns a stream of engine updates
 func (s *Server) EngineWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_EngineWatchServer) error {
-	responseCh, err := s.Subscribe(types.InstanceTypeEngine)
+	responseCh, err := s.Subscribe(srv.Context(), types.InstanceTypeEngine)
 	if err != nil {
 		return err
 	}
@@ -642,4 +658,36 @@ func (s *Server) EngineRestoreStatus(ctx context.Context, req *spdkrpc.RestoreSt
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%v", err)
 	}
 	return resp, nil
+}
+
+// EngineSetQosLimit applies new QoS limits to a running engine's raid bdev
+// at runtime. Used by longhorn-manager to push StorageClass-derived QoS
+// changes onto attached volumes without re-creating them.
+func (s *Server) EngineSetQosLimit(ctx context.Context, req *spdkrpc.EngineSetQosLimitRequest) (*emptypb.Empty, error) {
+	if req.Name == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "engine name is required")
+	}
+	if req.QosLimits == nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "qos_limits is required (use all-zero fields for unlimited)")
+	}
+
+	s.RLock()
+	e := s.engineMap[req.Name]
+	spdkClient := s.spdkClient
+	s.RUnlock()
+
+	if e == nil {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find engine %v", req.Name)
+	}
+
+	limits := QosLimits{
+		RwIOsPerSec: req.QosLimits.RwIosPerSec,
+		RwMBPerSec:  req.QosLimits.RwMbPerSec,
+		RMBPerSec:   req.QosLimits.RMbPerSec,
+		WMBPerSec:   req.QosLimits.WMbPerSec,
+	}
+	if err := e.SetQosLimit(spdkClient, limits); err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to set QoS for engine %v: %v", req.Name, err)
+	}
+	return &emptypb.Empty{}, nil
 }

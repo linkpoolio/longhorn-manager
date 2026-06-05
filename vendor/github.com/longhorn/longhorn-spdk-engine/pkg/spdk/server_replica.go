@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -17,12 +19,18 @@ import (
 	"github.com/longhorn/backupstore"
 	"github.com/longhorn/types/pkg/generated/spdkrpc"
 
+	btypes "github.com/longhorn/backupstore/types"
 	butil "github.com/longhorn/backupstore/util"
 
 	"github.com/longhorn/longhorn-spdk-engine/pkg/api"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/types"
 	"github.com/longhorn/longhorn-spdk-engine/pkg/util"
 )
+
+var retainBackupStateCounts = map[btypes.ProgressState]int{
+	btypes.ProgressStateComplete: 100,
+	btypes.ProgressStateError:    100,
+}
 
 func (s *Server) ReplicaCreate(ctx context.Context, req *spdkrpc.ReplicaCreateRequest) (ret *spdkrpc.Replica, err error) {
 	if req.Name == "" {
@@ -87,15 +95,31 @@ func (s *Server) ReplicaDelete(ctx context.Context, req *spdkrpc.ReplicaDeleteRe
 
 // ReplicaGet returns a specific replica
 func (s *Server) ReplicaGet(ctx context.Context, req *spdkrpc.ReplicaGetRequest) (ret *spdkrpc.Replica, err error) {
-	s.RLock()
-	r := s.replicaMap[req.Name]
-	s.RUnlock()
-
-	if r == nil {
+	// Read path goes through the observer — no s.replicaMap lookup. The
+	// persisted record is the source of identity; SPDK is the source of
+	// runtime state. The cached *Replica in s.replicaMap is owned by
+	// mutating handlers for per-replica mutex serialisation only.
+	if s.metadataDir == "" {
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "ReplicaGet: persistence disabled")
+	}
+	record, err := loadReplicaRecord(s.metadataDir, req.Name)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "ReplicaGet: load record: %v", err)
+	}
+	if record == nil {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %v", req.Name)
 	}
 
-	return r.Get(), nil
+	s.RLock()
+	spdkClient := s.spdkClient
+	nodeTransport := s.nodeTransport
+	s.RUnlock()
+
+	r, err := BuildReplicaFromRecord(spdkClient, record, nodeTransport)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "ReplicaGet: build from SPDK: %v", err)
+	}
+	return ServiceReplicaToProtoReplica(r), nil
 }
 
 // ReplicaExpand expands a replica
@@ -118,17 +142,28 @@ func (s *Server) ReplicaExpand(ctx context.Context, req *spdkrpc.ReplicaExpandRe
 
 // ReplicaList returns all replicas
 func (s *Server) ReplicaList(ctx context.Context, req *emptypb.Empty) (*spdkrpc.ReplicaListResponse, error) {
-	replicaMap := map[string]*Replica{}
 	res := map[string]*spdkrpc.Replica{}
 
-	s.RLock()
-	for k, v := range s.replicaMap {
-		replicaMap[k] = v
+	if s.metadataDir == "" {
+		return &spdkrpc.ReplicaListResponse{Replicas: res}, nil
 	}
+	records, err := loadReplicaRecords(s.metadataDir)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "ReplicaList: load records: %v", err)
+	}
+
+	s.RLock()
+	spdkClient := s.spdkClient
+	nodeTransport := s.nodeTransport
 	s.RUnlock()
 
-	for replicaName, r := range replicaMap {
-		res[replicaName] = r.Get()
+	for name, record := range records {
+		r, err := BuildReplicaFromRecord(spdkClient, record, nodeTransport)
+		if err != nil {
+			logrus.WithError(err).Warnf("ReplicaList: failed to derive %s; skipping", name)
+			continue
+		}
+		res[name] = ServiceReplicaToProtoReplica(r)
 	}
 
 	return &spdkrpc.ReplicaListResponse{Replicas: res}, nil
@@ -136,7 +171,7 @@ func (s *Server) ReplicaList(ctx context.Context, req *emptypb.Empty) (*spdkrpc.
 
 // ReplicaWatch returns a stream of replica updates
 func (s *Server) ReplicaWatch(req *emptypb.Empty, srv spdkrpc.SPDKService_ReplicaWatchServer) error {
-	responseCh, err := s.Subscribe(types.InstanceTypeReplica)
+	responseCh, err := s.Subscribe(srv.Context(), types.InstanceTypeReplica)
 	if err != nil {
 		return err
 	}
@@ -597,7 +632,10 @@ func (s *Server) ReplicaRebuildingDstStart(ctx context.Context, req *spdkrpc.Rep
 	if err != nil {
 		return nil, err
 	}
-	return &spdkrpc.ReplicaRebuildingDstStartResponse{DstHeadLvolAddress: address}, nil
+	return &spdkrpc.ReplicaRebuildingDstStartResponse{
+		DstHeadLvolAddress:            address,
+		DstHeadLvolTransportAddresses: r.headLvolTransportAddresses(),
+	}, nil
 }
 
 // ReplicaRebuildingDstFinish finishes a rebuilding for a replica
@@ -752,7 +790,12 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "cannot find replica %v for volume %v backup creation", req.ReplicaName, req.VolumeName)
 	}
 
-	backup, err := NewBackup(s.spdkClient, backupName, req.VolumeName, req.SnapshotName, replica, s.portAllocator)
+	var backup *Backup
+	backup, err = NewBackup(s.spdkClient, backupName, req.VolumeName, req.SnapshotName, replica, s.portAllocator, func() {
+		s.Lock()
+		defer s.Unlock()
+		s.onBackupTerminalLocked()
+	})
 	if err != nil {
 		err = errors.Wrapf(err, "failed to create backup instance %v for volume %v", backupName, req.VolumeName)
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%v", err)
@@ -781,9 +824,27 @@ func (s *Server) ReplicaBackupCreate(ctx context.Context, req *spdkrpc.BackupCre
 		Labels:   labelMap,
 	}
 
-	s.backupMap[backupName] = backup
+	s.trackBackupLocked(backupName, backup)
 	if err := backup.BackupCreate(config); err != nil {
-		delete(s.backupMap, backupName)
+		backup.Lock()
+		backup.releaseHeavyResourcesLocked()
+		if backup.hasActiveSnapshotResourcesLocked() {
+			// Resources (NVMe-oF target, initiator, or port) are still
+			// active after a partial rollback failure.  Keep the backup
+			// in the map so it remains discoverable for monitoring and
+			// future prune/retry, and mark it as a terminal error.
+			backup.State = btypes.ProgressStateError
+			backup.Error = err.Error()
+			if backup.terminalAt.IsZero() {
+				backup.terminalAt = time.Now()
+			}
+			backup.markTerminalHandledLocked()
+			backup.log.Warnf("Backup %v creation failed with resources still active; keeping in map for observability", backupName)
+			backup.Unlock()
+		} else {
+			backup.Unlock()
+			s.removeBackupLocked(backupName)
+		}
 		err = errors.Wrapf(err, "failed to create backup %v for volume %v", backupName, req.VolumeName)
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "%v", err)
 	}
@@ -804,8 +865,8 @@ func (s *Server) ReplicaBackupStatus(ctx context.Context, req *spdkrpc.BackupSta
 	}
 
 	replicaAddress := ""
-	if backup.replica != nil {
-		replicaAddress = fmt.Sprintf("tcp://%s", backup.replica.GetAddress())
+	if backup.replicaAddress != "" {
+		replicaAddress = fmt.Sprintf("tcp://%s", backup.replicaAddress)
 	}
 
 	return &spdkrpc.BackupStatusResponse{
@@ -816,6 +877,54 @@ func (s *Server) ReplicaBackupStatus(ctx context.Context, req *spdkrpc.BackupSta
 		State:          string(backup.State),
 		ReplicaAddress: replicaAddress,
 	}, nil
+}
+
+func (s *Server) trackBackupLocked(backupName string, backup *Backup) {
+	s.backupMap[backupName] = backup
+	s.pruneRetainedBackupsLocked()
+}
+
+// onBackupTerminalLocked is called (via the onTerminal goroutine) when a backup
+// first reaches a terminal state. It triggers pruning so that excess terminal
+// entries are evicted based on their terminalAt timestamp.
+func (s *Server) onBackupTerminalLocked() {
+	s.pruneRetainedBackupsLocked()
+}
+
+func (s *Server) removeBackupLocked(backupName string) {
+	delete(s.backupMap, backupName)
+}
+
+func (s *Server) pruneRetainedBackupsLocked() {
+	type terminalEntry struct {
+		name       string
+		terminalAt time.Time
+	}
+	for state, limit := range retainBackupStateCounts {
+		var entries []terminalEntry
+		for name, backup := range s.backupMap {
+			backup.Lock()
+			if backup.State == state && backup.terminalSeen && !backup.hasActiveSnapshotResourcesLocked() {
+				entries = append(entries, terminalEntry{name, backup.terminalAt})
+			}
+			backup.Unlock()
+		}
+		if len(entries) <= limit {
+			continue
+		}
+		// Sort newest first (descending terminalAt); keep the first `limit`.
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].terminalAt.After(entries[j].terminalAt)
+		})
+		for _, e := range entries[limit:] {
+			if backup := s.backupMap[e.name]; backup != nil {
+				backup.Lock()
+				backup.releaseHeavyResourcesLocked()
+				backup.Unlock()
+			}
+			s.removeBackupLocked(e.name)
+		}
+	}
 }
 
 func (s *Server) ReplicaBackupRestore(ctx context.Context, req *spdkrpc.ReplicaBackupRestoreRequest) (ret *emptypb.Empty, err error) {

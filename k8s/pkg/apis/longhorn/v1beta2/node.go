@@ -11,6 +11,7 @@ const (
 	NodeConditionTypeNFSClientInstalled  = "NFSClientInstalled"
 	NodeConditionTypeSchedulable         = "Schedulable"
 	NodeConditionTypeHugePagesAvailable  = "HugePagesAvailable"
+	NodeConditionTypeNvmfRDMACapable     = "NvmfRDMACapable"
 )
 
 const (
@@ -32,6 +33,7 @@ const (
 	NodeConditionReasonKubernetesNodeCordoned    = "KubernetesNodeCordoned"
 	NodeConditionReasonHugePagesNotConfigured    = "HugePagesNotConfigured"
 	NodeConditionReasonInsufficientHugePages     = "InsufficientHugePages"
+	NodeConditionReasonNvmfRDMAModulesMissing    = "NvmfRDMAModulesMissing"
 )
 
 const (

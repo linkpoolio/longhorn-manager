@@ -68,14 +68,14 @@ require (
 	github.com/jinzhu/copier v0.4.0
 	github.com/kubernetes-csi/csi-lib-utils v0.24.0
 	github.com/longhorn/backing-image-manager v1.12.0-dev-20260503
-	github.com/longhorn/backupstore v0.0.0-20260502085909-21ee466f5a8a
-	github.com/longhorn/go-common-libs v0.0.0-20260502161928-1e84fa75a8f1
+	github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68
+	github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2
 	github.com/longhorn/go-iscsi-helper v0.0.0-20260331100542-4c4c6f91525b
-	github.com/longhorn/go-spdk-helper v0.6.2
+	github.com/longhorn/go-spdk-helper v0.6.3-0.20260601101353-0be728aae70e
 	github.com/longhorn/longhorn-engine v1.12.0-dev-20260503.0.20260514055128-ec3f7dbb512f
 	github.com/longhorn/longhorn-instance-manager v1.12.0-dev-20260503.0.20260515063452-1ecf693e484f
 	github.com/longhorn/longhorn-share-manager v1.12.0-dev-20260503.0.20260510090948-3e59157e1fb2
-	github.com/longhorn/longhorn-spdk-engine v0.0.0-20260515051212-7e0ddb934b91
+	github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260531.0.20260601104844-f87a76cf8bc2
 	github.com/prometheus/client_golang v1.23.2
 	// dynamiclistener v0.7.1 has nil pointer dereference issues, so temporarily pin to v0.7.0
 	github.com/rancher/dynamiclistener v0.8.2
@@ -104,6 +104,8 @@ require (
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0
 )
+
+require github.com/longhorn/types v0.0.0-20260522011813-8f1780fad833
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3 // indirect
@@ -138,7 +140,6 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
-	github.com/longhorn/types v0.0.0-20260514154143-1dfb06f48eeb // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/lxzan/gws v1.8.9 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
@@ -154,7 +155,7 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
+	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
@@ -226,3 +227,11 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260605111907-d8bd1be9b74d
+
+replace github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260605112727-fca1f6d8519d
+
+replace github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260605134631-8fea1d940f5e
+
+replace github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260605142046-7dbce2c0783f

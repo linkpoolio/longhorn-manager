@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	LockFile    = "/var/run/longhorn-spdk.lock"
-	LockTimeout = 120 * time.Second
+	LockDir        = "/var/run/longhorn"
+	LockFilePrefix = LockDir + "/spdk"
+	LockTimeout    = 120 * time.Second
 
 	HostProc = "/host/proc"
 
@@ -77,6 +78,13 @@ type Initiator struct {
 	logger logrus.FieldLogger
 }
 
+type initiatorLock struct {
+	lock      *commonns.FileLock
+	operation string
+	logger    logrus.FieldLogger
+	lockFile  string
+}
+
 type NVMeTCPInfo struct {
 	SubsystemNQN       string
 	UUID               string
@@ -84,6 +92,8 @@ type NVMeTCPInfo struct {
 	TransportServiceID string
 	ControllerName     string
 	NamespaceName      string
+
+	Transport string
 }
 
 type UblkInfo struct {
@@ -134,23 +144,50 @@ func NewInitiator(name, hostProc string, nvmeTCPInfo *NVMeTCPInfo, ublkInfo *Ubl
 	}, nil
 }
 
-func (i *Initiator) newLock() (*commonns.FileLock, error) {
+// lockFilePath returns the per-volume lock file path. Each volume/initiator
+// gets its own lock file so that operations on different volumes can proceed
+// in parallel. The lock serializes operations within the same volume only
+// (e.g., preventing concurrent Start and Stop on the same NVMe subsystem).
+func (i *Initiator) lockFilePath() string {
+	return fmt.Sprintf("%s-%s.lock", LockFilePrefix, i.Name)
+}
+
+func (i *Initiator) newLock(operation string) (*initiatorLock, error) {
 	if i.hostProc != commontypes.HostProcDirectory {
 		return nil, fmt.Errorf("invalid host proc path %s for initiator %s, supported path is %s", i.hostProc, i.Name, commontypes.HostProcDirectory)
 	}
 
-	lock := commonns.NewLock(LockFile, LockTimeout)
+	if _, err := commonns.CreateDirectory(LockDir, time.Time{}); err != nil {
+		return nil, errors.Wrapf(err, "failed to create lock directory %s for initiator %s", LockDir, i.Name)
+	}
+
+	lockFile := i.lockFilePath()
+	lock := commonns.NewLock(lockFile, LockTimeout)
 	if err := lock.Lock(); err != nil {
 		return nil, errors.Wrapf(err, "failed to get file lock for initiator %s", i.Name)
 	}
 
-	return lock, nil
+	il := &initiatorLock{
+		lock:      lock,
+		operation: operation,
+		logger:    i.logger,
+		lockFile:  lockFile,
+	}
+
+	return il, nil
+}
+
+func (lock *initiatorLock) Unlock() {
+	if lock == nil || lock.lock == nil {
+		return
+	}
+	lock.lock.Unlock()
 }
 
 // DiscoverNVMeTCPTarget discovers a target
 func (i *Initiator) DiscoverNVMeTCPTarget(ip, port string) (string, error) {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("DiscoverNVMeTCPTarget")
 		if err != nil {
 			return "", err
 		}
@@ -163,7 +200,7 @@ func (i *Initiator) DiscoverNVMeTCPTarget(ip, port string) (string, error) {
 // ConnectNVMeTCPTarget connects to a target
 func (i *Initiator) ConnectNVMeTCPTarget(ip, port, nqn string) (string, error) {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("ConnectNVMeTCPTarget")
 		if err != nil {
 			return "", err
 		}
@@ -191,7 +228,7 @@ func (i *Initiator) executeNVMeTCPPathOp(transportAddress, transportServiceID, o
 	}
 
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock(opName)
 		if err != nil {
 			return err
 		}
@@ -221,7 +258,7 @@ func (i *Initiator) DisconnectNVMeTCPTarget() error {
 		return fmt.Errorf("failed to DisconnectNVMeTCPTarget because nvmeTCPInfo is nil")
 	}
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("DisconnectNVMeTCPTarget")
 		if err != nil {
 			return err
 		}
@@ -255,7 +292,7 @@ func (i *Initiator) WaitForNVMeTCPConnect(maxRetries int, retryInterval time.Dur
 		return fmt.Errorf("failed to WaitForNVMeTCPConnect because nvmeTCPInfo is nil")
 	}
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("WaitForNVMeTCPConnect")
 		if err != nil {
 			return err
 		}
@@ -297,7 +334,7 @@ func (i *Initiator) WaitForNVMeTCPTargetDisconnect(maxRetries int, retryInterval
 		return fmt.Errorf("failed to WaitForNVMeTCPTargetDisconnect because nvmeTCPInfo is nil")
 	}
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("WaitForNVMeTCPTargetDisconnect")
 		if err != nil {
 			return err
 		}
@@ -353,7 +390,7 @@ func (i *Initiator) WaitForNVMeTCPTargetDisconnect(maxRetries int, retryInterval
 // Suspend suspends the device mapper device for the NVMe/TCP initiator
 func (i *Initiator) Suspend(noflush, nolockfs bool) error {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("Suspend")
 		if err != nil {
 			return err
 		}
@@ -377,7 +414,7 @@ func (i *Initiator) Suspend(noflush, nolockfs bool) error {
 // Resume resumes the device mapper device for the NVMe/TCP initiator
 func (i *Initiator) Resume() error {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("Resume")
 		if err != nil {
 			return err
 		}
@@ -441,7 +478,7 @@ func (i *Initiator) StartNvmeTCPInitiator(transportAddress, transportServiceID s
 	}).Info("Starting NVMe/TCP initiator")
 
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("StartNvmeTCPInitiator")
 		if err != nil {
 			return false, err
 		}
@@ -579,7 +616,7 @@ func (i *Initiator) StartUblkInitiator(spdkClient *client.Client, dmDeviceAndEnd
 	}
 
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("StartUblkInitiator")
 		if err != nil {
 			return false, err
 		}
@@ -770,6 +807,7 @@ func (i *Initiator) ensureNVMeTCPPathWithoutLock(transportAddress, transportServ
 		*i.NVMeTCPInfo = previousInfo
 		return err
 	}
+
 	if err := i.waitAndLoadNVMeDeviceInfoWithoutLock(transportAddress, transportServiceID); err != nil {
 		cleanupConnection(err)
 		*i.NVMeTCPInfo = previousInfo
@@ -812,20 +850,24 @@ func (i *Initiator) discoverAndConnectNVMeTCPTarget(transportAddress, transportS
 			// This avoids "failed to add controller" errors from nvme-cli 2.x
 			// when the kernel already has NVMe-oF connections to the same
 			// target address with the same hostNQN/hostID.
+			transport := i.NVMeTCPInfo.Transport
+			if transport == "" {
+				transport = DefaultTransportType
+			}
 			if i.NVMeTCPInfo.SubsystemNQN != "" {
 				subsystemNQN = i.NVMeTCPInfo.SubsystemNQN
-				i.logger.Infof("Using pre-configured SubsystemNQN %s for target %s:%s, skipping discovery",
-					subsystemNQN, transportAddress, transportServiceID)
+				i.logger.Infof("Using pre-configured SubsystemNQN %s for target %s:%s (transport=%s), skipping discovery",
+					subsystemNQN, transportAddress, transportServiceID, transport)
 			} else {
-				i.logger.Infof("Discovering NVMe/TCP target %s:%s", transportAddress, transportServiceID)
-				subsystemNQN, e = DiscoverTarget(transportAddress, transportServiceID, i.executor)
+				i.logger.Infof("Discovering NVMe-oF target %s:%s (transport=%s)", transportAddress, transportServiceID, transport)
+				subsystemNQN, e = DiscoverTargetWithTransport(transport, transportAddress, transportServiceID, i.executor)
 				if e != nil {
-					return errors.Wrapf(e, "discover NVMe/TCP target %s:%s failed", transportAddress, transportServiceID)
+					return errors.Wrapf(e, "discover NVMe-oF target %s:%s (transport=%s) failed", transportAddress, transportServiceID, transport)
 				}
 			}
 
-			i.logger.Infof("Connecting to NVMe/TCP target %s:%s with subsystemNQN %s", transportAddress, transportServiceID, subsystemNQN)
-			controllerName, e = ConnectTarget(transportAddress, transportServiceID, subsystemNQN, i.executor)
+			i.logger.Infof("Connecting to NVMe-oF target %s:%s with subsystemNQN %s (transport=%s)", transportAddress, transportServiceID, subsystemNQN, transport)
+			controllerName, e = ConnectTargetWithTransport(transport, transportAddress, transportServiceID, subsystemNQN, i.executor)
 			if e != nil {
 				// "already connected" means the path is present in the kernel
 				// but GetDevices() couldn't find a namespace device yet (e.g.
@@ -891,11 +933,20 @@ func (i *Initiator) findControllerBySubsystem(nqn, transportAddress, transportSe
 // Stop stops the NVMe/TCP initiator
 func (i *Initiator) Stop(spdkClient *client.Client, dmDeviceAndEndpointCleanupRequired, deferDmDeviceCleanup, returnErrorForBusyDevice bool) (bool, error) {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("Stop")
 		if err != nil {
 			return false, err
 		}
-		defer lock.Unlock()
+		defer func() {
+			// Remove the lock file while still holding the lock to avoid
+			// an unlink race (where a waiter locks the unlinked inode while
+			// a new arrival creates and locks a fresh file at the same path).
+			errRemove := os.Remove(i.lockFilePath())
+			if errRemove != nil && !os.IsNotExist(errRemove) {
+				i.logger.WithError(errRemove).Warnf("Failed to remove lock file %s after stopping initiator %s", i.lockFilePath(), i.Name)
+			}
+			lock.Unlock()
+		}()
 	}
 
 	return i.stopWithoutLock(spdkClient, dmDeviceAndEndpointCleanupRequired, deferDmDeviceCleanup, returnErrorForBusyDevice)
@@ -995,6 +1046,10 @@ func (i *Initiator) GetEndpoint() string {
 	return ""
 }
 
+func (i *Initiator) GetExecutor() *commonns.Executor {
+	return i.executor
+}
+
 // WaitForControllerLive waits for the NVMe controller at the given address to
 // reach "live" state. This is needed after nvme connect which returns
 // immediately while the TCP handshake completes asynchronously.
@@ -1053,7 +1108,7 @@ func (i *Initiator) WaitForControllerLive(transportAddress, transportServiceID s
 // GetDevice returns the device information
 func (i *Initiator) LoadNVMeDeviceInfo(transportAddress, transportServiceID, subsystemNQN string) (err error) {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("LoadNVMeDeviceInfo")
 		if err != nil {
 			return err
 		}
@@ -1313,7 +1368,7 @@ func (i *Initiator) suspendLinearDmDevice(noflush, nolockfs bool) error {
 // ReloadDmDevice reloads the linear dm device
 func (i *Initiator) ReloadDmDevice() (err error) {
 	if i.hostProc != "" {
-		lock, err := i.newLock()
+		lock, err := i.newLock("ReloadDmDevice")
 		if err != nil {
 			return err
 		}

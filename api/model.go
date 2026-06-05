@@ -76,6 +76,12 @@ type Volume struct {
 	ReplicaAutoBalance         longhorn.ReplicaAutoBalance `json:"replicaAutoBalance"`
 	RebuildConcurrentSyncLimit int                         `json:"rebuildConcurrentSyncLimit"`
 
+	// QosLimits caps aggregate raid bdev I/O for v2 volumes via SPDK's
+	// bdev_set_qos_limit. Carried through StorageClass parameters → CSI →
+	// VolumeSpec.QosLimits → EngineSpec.QosLimits → SPDK engine. nil or
+	// all-zero means unlimited.
+	QosLimits *longhorn.QosLimits `json:"qosLimits,omitempty"`
+
 	Conditions       map[string]longhorn.Condition `json:"conditions"`
 	KubernetesStatus longhorn.KubernetesStatus     `json:"kubernetesStatus"`
 	CloneStatus      longhorn.VolumeCloneStatus    `json:"cloneStatus"`

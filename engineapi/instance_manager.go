@@ -16,6 +16,7 @@ import (
 	imclient "github.com/longhorn/longhorn-instance-manager/pkg/client"
 	immeta "github.com/longhorn/longhorn-instance-manager/pkg/meta"
 	imutil "github.com/longhorn/longhorn-instance-manager/pkg/util"
+	imrpc "github.com/longhorn/types/pkg/generated/imrpc"
 
 	"github.com/longhorn/longhorn-manager/types"
 	"github.com/longhorn/longhorn-manager/util"
@@ -306,6 +307,8 @@ func parseInstance(p *imapi.Instance) *longhorn.InstanceProcess {
 			Paths:           paths,
 			PortStart:       p.InstanceStatus.PortStart,
 			PortEnd:         p.InstanceStatus.PortEnd,
+			TcpPort:         p.InstanceStatus.TcpPort,
+			RdmaPort:        p.InstanceStatus.RdmaPort,
 			TargetPortStart: p.InstanceStatus.TargetPortStart,
 			TargetPortEnd:   p.InstanceStatus.TargetPortEnd,
 			UblkID:          p.InstanceStatus.UblkID,
@@ -514,6 +517,7 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 	binary := ""
 	args := []string{}
 	replicaAddresses := map[string]string{}
+	replicaTransportAddresses := map[string]*imrpc.ReplicaTransportAddresses{}
 
 	var err error
 
@@ -530,6 +534,12 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 		}
 	case longhorn.DataEngineTypeV2:
 		replicaAddresses = req.Engine.Status.CurrentReplicaAddressMap
+		for name, addrs := range req.Engine.Status.CurrentReplicaTransportAddressMap {
+			replicaTransportAddresses[name] = &imrpc.ReplicaTransportAddresses{
+				TcpAddress:  addrs.TcpAddress,
+				RdmaAddress: addrs.RdmaAddress,
+			}
+		}
 		// v2 target doesn't need frontend - it will be set by initiator (EngineFrontend)
 	}
 
@@ -556,15 +566,17 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 		BinaryArgs: args,
 
 		Engine: imclient.EngineCreateRequest{
-			ReplicaAddressMap: replicaAddresses,
-			Frontend:          frontend,
-			UblkQueueDepth:    req.UblkQueueDepth,
-			UblkNumberOfQueue: req.UblkNumberOfQueue,
-			UpgradeRequired:   req.UpgradeRequired,
-			InitiatorAddress:  req.InitiatorAddress,
-			TargetAddress:     req.TargetAddress,
-			SalvageRequested:  req.Engine.Spec.SalvageRequested,
-			SnapshotMaxCount:  req.Engine.Spec.SnapshotMaxCount,
+			ReplicaAddressMap:          replicaAddresses,
+			ReplicaTransportAddressMap: replicaTransportAddresses,
+			Frontend:                   frontend,
+			UblkQueueDepth:             req.UblkQueueDepth,
+			UblkNumberOfQueue:          req.UblkNumberOfQueue,
+			UpgradeRequired:            req.UpgradeRequired,
+			InitiatorAddress:           req.InitiatorAddress,
+			TargetAddress:              req.TargetAddress,
+			SalvageRequested:           req.Engine.Spec.SalvageRequested,
+			SnapshotMaxCount:           req.Engine.Spec.SnapshotMaxCount,
+			QosLimits:                  longhornQosLimitsToIMRPC(req.Engine.Spec.QosLimits),
 		},
 	})
 
@@ -985,4 +997,48 @@ func (c *InstanceManagerClient) LogSetFlags(dataEngine longhorn.DataEngineType, 
 	}
 
 	return c.instanceServiceGrpcClient.LogSetFlags(string(dataEngine), component, flags)
+}
+
+// EngineInstanceSetQosLimit applies new QoS limits to a running v2 engine
+// instance via the IM gRPC. Used by the volume controller to push
+// VolumeSpec.QosLimits changes onto attached volumes without re-creating
+// them. Pass an all-zero / nil QosLimits to remove the cap.
+func (c *InstanceManagerClient) EngineInstanceSetQosLimit(engine *longhorn.Engine, qos *longhorn.QosLimits) error {
+	if engine == nil {
+		return fmt.Errorf("EngineInstanceSetQosLimit: nil engine")
+	}
+	if engine.Spec.DataEngine != longhorn.DataEngineTypeV2 {
+		return fmt.Errorf("EngineInstanceSetQosLimit: only v2 data engine supports QoS limits")
+	}
+	if err := CheckInstanceManagerCompatibility(c.apiMinVersion, c.apiVersion); err != nil {
+		return err
+	}
+	imLimits := longhornQosLimitsToIMRPC(qos)
+	if imLimits == nil {
+		// Wire-level requires a non-nil message; "unlimited" = all zeros.
+		imLimits = &imrpc.QosLimits{}
+	}
+	return c.instanceServiceGrpcClient.InstanceSetQosLimit(
+		string(engine.Spec.DataEngine),
+		engine.Name,
+		string(longhorn.InstanceManagerTypeEngine),
+		imLimits,
+	)
+}
+
+// longhornQosLimitsToIMRPC converts the QosLimits CRD field to the imrpc
+// wire shape used by InstanceCreate. nil-in / nil-out so the engine sees no
+// cap when QoS isn't configured. Two structurally identical types in
+// different packages — split because longhorn-manager's CRDs and the IM's
+// proto types are owned by different repos.
+func longhornQosLimitsToIMRPC(in *longhorn.QosLimits) *imrpc.QosLimits {
+	if in == nil {
+		return nil
+	}
+	return &imrpc.QosLimits{
+		RwIosPerSec: in.RwIOsPerSec,
+		RwMbPerSec:  in.RwMBPerSec,
+		RMbPerSec:   in.RMBPerSec,
+		WMbPerSec:   in.WMBPerSec,
+	}
 }
