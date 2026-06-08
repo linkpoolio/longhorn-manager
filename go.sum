@@ -168,10 +168,10 @@ github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de h1:9TO3cAIGXtEhn
 github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de/go.mod h1:zAbeS9B/r2mtpb6U+EI2rYA5OAXxsYw6wTamcNW+zcE=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260605111907-d8bd1be9b74d h1:Cc9YAe78bN5emRMNHqL4Lk89XzPcdwat+iQa0wO1tgs=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260605111907-d8bd1be9b74d/go.mod h1:ZxbMkGsbC2TpzuGLjn9yXXExolt8/F3dl/C8O9/Qa7s=
-github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260605142046-7dbce2c0783f h1:eVNWtSb+Aoy6FXYP82UlXp+BldE5qauvRVHFuZUKXOY=
-github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260605142046-7dbce2c0783f/go.mod h1:QAggvl65wVdhJeGf2A0qHPVe2UNAJQHW5rR9ANoiNYY=
-github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260605134631-8fea1d940f5e h1:KDMQTRuG2MFgygSwo3DoeEUR6+wZHnlE431s8pU68Xw=
-github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260605134631-8fea1d940f5e/go.mod h1:A6N+uO5l9QChREZwCYucB5efNntKehi1dQUFo5/y1AM=
+github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260608085734-b1a9b631b97b h1:EO1pvqUgraeOEAgO5VIWTQfTrbXLE/ZxcEJpQiLAC3U=
+github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260608085734-b1a9b631b97b/go.mod h1:/HKnr68pjaMHYROUwphERQcGN8nt6uSmGZS54UtnBRk=
+github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260608085253-9680e0c9ccfd h1:QCuyRBL6fBCtAc+Ng1th/Gj4FG4WyzcCNgHz+Orvqz4=
+github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260608085253-9680e0c9ccfd/go.mod h1:A6N+uO5l9QChREZwCYucB5efNntKehi1dQUFo5/y1AM=
 github.com/linkpoolio/types v0.0.0-20260605112727-fca1f6d8519d h1:Trpcn8Mmm58xRg+BiQbrJpKVQz9z7141tuSKPOuQGvE=
 github.com/linkpoolio/types v0.0.0-20260605112727-fca1f6d8519d/go.mod h1:F84Y4B+3GyEcjr9EbwdI3RgOzT8nm2EqHxqyTWkCfRE=
 github.com/longhorn/backing-image-manager v1.12.0-dev-20260503 h1:DXBaexlHBBolM2P0XoAE7uSpQNOm2T4lBOij0dhQ6EQ=
