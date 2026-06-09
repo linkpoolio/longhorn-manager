@@ -10,12 +10,12 @@ import (
 // spdk-engine repo, these tests fail loudly before the image ships.
 
 var replicaTimeoutSettings = []struct {
-	name    SettingName
-	envVar  string
-	defVal  string
-	min     int
-	hasMax  bool
-	max     int
+	name        SettingName
+	envVar      string
+	defVal      string
+	min         int
+	hasMax      bool
+	max         int
 	settingType SettingType
 }{
 	{SettingNameDataEngineReplicaCtrlrLossTimeoutSec, EnvV2ReplicaCtrlrLossTimeoutSec, "15", 0, false, 0, SettingTypeInt},

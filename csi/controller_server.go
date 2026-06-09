@@ -38,8 +38,8 @@ import (
 
 const (
 	// we wait 1m30s for the volume state polling, this leaves 20s for the rest of the function call
-	timeoutAttachDetach         = 90 * time.Second
-	tickAttachDetach            = 500 * time.Millisecond
+	timeoutAttachDetach = 90 * time.Second
+	tickAttachDetach    = 500 * time.Millisecond
 	// timeoutVolumeReady caps the inline wait for a volume to flip Ready=true
 	// when the previous attachment is still detaching. Bounded so we don't
 	// block indefinitely on truly faulted/restoring volumes.
