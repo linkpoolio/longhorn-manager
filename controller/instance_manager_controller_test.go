@@ -911,3 +911,58 @@ func (s *TestSuite) TestSpdkMemorySizeOverrideSynced(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(limitSynced, Equals, true, Commentf("with label, 16Gi hugepage limit must read in-sync"))
 }
+
+// Every per-node SPDK override must be resolved by the same effective getter
+// the pod is built from, so the danger-zone sync check and the pod agree. This
+// pins that the cpu-mask and interrupt-mode getters honor their node labels
+// (the memory-size getter is covered above). If a future override is added that
+// builds the pod from a label but sync-checks the raw cluster setting, it will
+// reintroduce the ma4-worker-1 delete/recreate loop -- this test guards the
+// existing ones against that regression.
+func (s *TestSuite) TestEffectiveSpdkOverridesHonorNodeLabels(c *C) {
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+	kubeNodeIndexer := informerFactories.KubeInformerFactory.Core().V1().Nodes().Informer().GetIndexer()
+	sIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer()
+
+	imc, err := newTestInstanceManagerController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+	c.Assert(err, IsNil)
+
+	for _, st := range []*longhorn.Setting{
+		newSetting(string(types.SettingNameDataEngineCPUMask), `{"v2":"0x1"}`),
+		newSetting(string(types.SettingNameDataEngineInterruptModeEnabled), `{"v2":"true"}`),
+	} {
+		_, err = lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), st, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		c.Assert(sIndexer.Add(st), IsNil)
+	}
+
+	im := newInstanceManager(TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+		TestNode1, TestNode1, TestIP1, nil, nil, nil, longhorn.DataEngineTypeV2, TestInstanceManagerImage, false)
+
+	kubeNode := newKubernetesNode(TestNode1, corev1.ConditionTrue, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionTrue)
+	kubeNode.Labels = map[string]string{
+		types.NodeSpdkCPUMaskLabelKey:       "0xFF00",
+		types.NodeSpdkInterruptModeLabelKey: "false",
+	}
+	c.Assert(kubeNodeIndexer.Add(kubeNode), IsNil)
+
+	cpuMask, err := imc.getEffectiveSpdkCPUMask(im)
+	c.Assert(err, IsNil)
+	c.Assert(cpuMask, Equals, "0xFF00", Commentf("cpu-mask label must override cluster setting 0x1"))
+
+	interruptMode, err := imc.getEffectiveSpdkInterruptMode(im)
+	c.Assert(err, IsNil)
+	c.Assert(interruptMode, Equals, "false", Commentf("interrupt-mode label must override cluster setting true"))
+
+	// RDMA transport forces interrupt mode off regardless of the interrupt label.
+	kubeNode.Labels[types.NodeSpdkInterruptModeLabelKey] = "true"
+	kubeNode.Labels[types.NodeNvmfTransportLabelKey] = types.NodeNvmfTransportLabelValueRDMA
+	c.Assert(kubeNodeIndexer.Update(kubeNode), IsNil)
+	interruptMode, err = imc.getEffectiveSpdkInterruptMode(im)
+	c.Assert(err, IsNil)
+	c.Assert(interruptMode, Equals, "false", Commentf("RDMA transport must force interrupt mode off"))
+}
