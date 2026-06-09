@@ -6559,15 +6559,23 @@ func buildReplicaTransportAddressMap(rs map[string]*longhorn.Replica, replicaAdd
 		if !ok || r == nil {
 			continue
 		}
-		if r.Status.TcpPort == 0 && r.Status.RdmaPort == 0 {
-			continue
-		}
 		entry := longhorn.ReplicaTransportAddresses{}
 		if r.Status.TcpPort != 0 {
 			entry.TcpAddress = imutil.GetURL(r.Status.StorageIP, r.Status.TcpPort)
 		}
 		if r.Status.RdmaPort != 0 {
 			entry.RdmaAddress = imutil.GetURL(r.Status.StorageIP, r.Status.RdmaPort)
+		}
+		// Every advertised replica must be reachable over TCP: an RDMA-capable
+		// replica always exposes a TCP fallback listener alongside its RDMA
+		// primary. Skip an entry with no TCP address -- that covers a legacy
+		// replica (no ports reported by a transport-unaware IM) and a
+		// malformed RDMA-only exposure. Publishing an RDMA-only (half) entry
+		// would be useless to a TCP engine and worse than no entry: with no
+		// entry the engine falls back to the legacy address over TCP, which is
+		// the correct behaviour for a transport-unaware target.
+		if entry.TcpAddress == "" {
+			continue
 		}
 		out[name] = entry
 	}
