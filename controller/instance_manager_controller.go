@@ -675,6 +675,16 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 		log.WithError(err).Warnf("Failed to check hugepage setting applied state for instance manager pod %v", im.Name)
 	}
 
+	// hostNetworkSynced: true means the pod's hostNetwork matches the effective
+	// desired value derived from the nvmf-transport node label. Treated like the
+	// other danger-zone checks: an out-of-sync pod is only deleted below when no
+	// instances are running in it.
+	hostNetworkSynced, err := imc.isHostNetworkSynced(im)
+	if err != nil {
+		hostNetworkSynced = true
+		log.WithError(err).Warnf("Failed to check host network sync state for instance manager pod %v", im.Name)
+	}
+
 	isSettingSynced, unSyncedSettings, isPodDeletedOrNotRunning, areInstancesRunningInPod, err := imc.areDangerZoneSettingsSyncedToIMPod(im)
 	if err != nil {
 		return err
@@ -699,7 +709,7 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 			longhorn.ConditionStatusFalse, longhorn.InstanceManagerConditionReasonSettingNotSynced, fmt.Sprintf("Settings %v are not synced", unSyncedSettings))
 	}
 
-	isPodDeletionNotRequired := (isSettingSynced && dataEngineCPUMaskIsApplied && hugepageSettingApplied) || areInstancesRunningInPod || isPodDeletedOrNotRunning
+	isPodDeletionNotRequired := (isSettingSynced && dataEngineCPUMaskIsApplied && hugepageSettingApplied && hostNetworkSynced) || areInstancesRunningInPod || isPodDeletedOrNotRunning
 	if im.Status.CurrentState != longhorn.InstanceManagerStateError &&
 		im.Status.CurrentState != longhorn.InstanceManagerStateStopped &&
 		isPodDeletionNotRequired {
@@ -710,7 +720,7 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 		log.Warnf("Instance manager pod %v is deleted or not running, recreating the pod", im.Name)
 	} else {
 		log.Warnf("Deleting instance manager pod %v because some danger zone settings are not synced since no instances are running and the following conditions are met: "+
-			"setting is not synced (%v) or data engine CPU mask is not applied (%v) or hugepage setting is not applied (%v)", im.Name, !isSettingSynced, !dataEngineCPUMaskIsApplied, !hugepageSettingApplied)
+			"setting is not synced (%v) or data engine CPU mask is not applied (%v) or hugepage setting is not applied (%v) or host network is not synced (%v)", im.Name, !isSettingSynced, !dataEngineCPUMaskIsApplied, !hugepageSettingApplied, !hostNetworkSynced)
 	}
 
 	if err := imc.cleanupInstanceManagerPod(im.Name); err != nil {
@@ -1055,6 +1065,56 @@ func (imc *InstanceManagerController) getEffectiveSpdkCPUMask(im *longhorn.Insta
 		}
 	}
 	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
+}
+
+// getEffectiveHostNetwork resolves whether the IM pod for this InstanceManager
+// should run with hostNetwork enabled, mirroring the decision
+// createInstanceManagerPodSpec makes: v2 IMs on nodes labelled
+// node.longhorn.io/nvmf-transport=rdma run on the host network so SPDK can
+// bind RDMA listeners to the node's RoCE-capable interface.
+func (imc *InstanceManagerController) getEffectiveHostNetwork(im *longhorn.InstanceManager) (bool, error) {
+	if types.IsDataEngineV1(im.Spec.DataEngine) {
+		return false, nil
+	}
+	kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to get kubernetes node %v for host network check", im.Spec.NodeID)
+	}
+	return kubeNode != nil && kubeNode.Labels[types.NodeNvmfTransportLabelKey] == types.NodeNvmfTransportLabelValueRDMA, nil
+}
+
+// isHostNetworkSynced checks whether the IM pod's hostNetwork setting matches
+// the effective desired value derived from the nvmf-transport node label.
+// Without this check, applying (or removing) the label after the pod exists
+// never converges: a fresh RDMA node whose IM pod was created before the label
+// was applied silently keeps serving over TCP forever. Like the other
+// danger-zone checks, an out-of-sync result only triggers pod deletion via
+// handlePod when no instances are running in the pod.
+func (imc *InstanceManagerController) isHostNetworkSynced(im *longhorn.InstanceManager) (bool, error) {
+	if types.IsDataEngineV1(im.Spec.DataEngine) {
+		return true, nil
+	}
+
+	if im.Status.CurrentState != longhorn.InstanceManagerStateRunning {
+		return true, nil
+	}
+
+	pod, err := imc.ds.GetPodRO(im.Namespace, im.Name)
+	if err != nil {
+		// Fail safe: keep the pod when the state cannot be verified.
+		return true, errors.Wrapf(err, "cannot get pod for instance manager %v", im.Name)
+	}
+	if pod == nil {
+		return true, nil
+	}
+
+	desiredHostNetwork, err := imc.getEffectiveHostNetwork(im)
+	if err != nil {
+		// Fail safe: keep the pod when the state cannot be verified.
+		return true, err
+	}
+
+	return pod.Spec.HostNetwork == desiredHostNetwork, nil
 }
 
 // getEffectiveSpdkMemorySize resolves the SPDK hugepage budget (in MiB) for

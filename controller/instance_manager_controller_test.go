@@ -850,7 +850,7 @@ func (s *TestSuite) TestNodeHasEnoughHugepageTotalCapacity(c *C) {
 // otherwise a node with the override is judged permanently out-of-sync and the
 // IM pod is deleted/recreated on every reconcile (the ma4-worker-1 loop).
 func (s *TestSuite) TestSpdkMemorySizeOverrideSynced(c *C) {
-	const clusterMemorySize = "1024"  // cluster data-engine-memory-size (MiB)
+	const clusterMemorySize = "1024"   // cluster data-engine-memory-size (MiB)
 	const overrideMemorySize = "16384" // per-node label override (MiB)
 
 	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
@@ -910,6 +910,79 @@ func (s *TestSuite) TestSpdkMemorySizeOverrideSynced(c *C) {
 	limitSynced, err := imc.isSettingHugepageLimitSynced(im, pod)
 	c.Assert(err, IsNil)
 	c.Assert(limitSynced, Equals, true, Commentf("with label, 16Gi hugepage limit must read in-sync"))
+}
+
+// createInstanceManagerPodSpec opts v2 IM pods into hostNetwork when the node
+// carries node.longhorn.io/nvmf-transport=rdma, but without a danger-zone sync
+// check the pod never converges when the label is applied or removed after the
+// pod exists (a fresh RDMA node whose IM pod predates the label silently runs
+// TCP forever). This pins isHostNetworkSynced to the same effective-value
+// pattern as the memory-size check above.
+func (s *TestSuite) TestHostNetworkOverrideSynced(c *C) {
+	type testCase struct {
+		labelValue     string // value for node.longhorn.io/nvmf-transport; "" means no label
+		podHostNetwork bool
+		expectedSynced bool
+	}
+
+	testCases := map[string]testCase{
+		"label present, pod not hostNetwork: not synced": {
+			labelValue:     types.NodeNvmfTransportLabelValueRDMA,
+			podHostNetwork: false,
+			expectedSynced: false,
+		},
+		"label present, hostNetwork pod: synced": {
+			labelValue:     types.NodeNvmfTransportLabelValueRDMA,
+			podHostNetwork: true,
+			expectedSynced: true,
+		},
+		"no label, hostNetwork pod: not synced": {
+			labelValue:     "",
+			podHostNetwork: true,
+			expectedSynced: false,
+		},
+		"no label, normal pod: synced": {
+			labelValue:     "",
+			podHostNetwork: false,
+			expectedSynced: true,
+		},
+	}
+
+	for name, tc := range testCases {
+		fmt.Printf("testing %v\n", name)
+
+		kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+		lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+		extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+
+		informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+		kubeNodeIndexer := informerFactories.KubeInformerFactory.Core().V1().Nodes().Informer().GetIndexer()
+		pIndexer := informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer()
+
+		imc, err := newTestInstanceManagerController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+		c.Assert(err, IsNil)
+
+		kubeNode := newKubernetesNode(TestNode1, corev1.ConditionTrue, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionTrue)
+		if tc.labelValue != "" {
+			kubeNode.Labels = map[string]string{types.NodeNvmfTransportLabelKey: tc.labelValue}
+		}
+		c.Assert(kubeNodeIndexer.Add(kubeNode), IsNil)
+
+		im := newInstanceManager(TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+			TestNode1, TestNode1, TestIP1, nil, nil, nil, longhorn.DataEngineTypeV2, TestInstanceManagerImage, false)
+
+		pod := newPod(&corev1.PodStatus{PodIP: TestIP1, Phase: corev1.PodRunning}, im.Name, im.Namespace, im.Spec.NodeID)
+		pod.Spec.HostNetwork = tc.podHostNetwork
+		c.Assert(pIndexer.Add(pod), IsNil)
+
+		desired, err := imc.getEffectiveHostNetwork(im)
+		c.Assert(err, IsNil)
+		c.Assert(desired, Equals, tc.labelValue == types.NodeNvmfTransportLabelValueRDMA, Commentf("test case: %v", name))
+
+		synced, err := imc.isHostNetworkSynced(im)
+		c.Assert(err, IsNil)
+		c.Assert(synced, Equals, tc.expectedSynced, Commentf("test case: %v", name))
+	}
 }
 
 // Every per-node SPDK override must be resolved by the same effective getter
