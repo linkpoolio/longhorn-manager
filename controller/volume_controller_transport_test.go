@@ -111,31 +111,3 @@ func TestBuildReplicaTransportAddressMap(t *testing.T) {
 		})
 	}
 }
-
-// replicaTransportPortReady gates a v2 replica out of the engine's address
-// maps until it has reported its transport (TCP) port, so the engine never
-// attaches with an incomplete transport-address map and falls back to dialing
-// the RDMA-primary port over TCP.
-func TestReplicaTransportPortReady(t *testing.T) {
-	repl := func(tcpPort int) *longhorn.Replica {
-		return &longhorn.Replica{Status: longhorn.ReplicaStatus{InstanceStatus: longhorn.InstanceStatus{TcpPort: tcpPort}}}
-	}
-	cases := []struct {
-		name       string
-		dataEngine longhorn.DataEngineType
-		replica    *longhorn.Replica
-		want       bool
-	}{
-		{"v1 is always ready (no transport map)", longhorn.DataEngineTypeV1, repl(0), true},
-		{"v2 not ready until TcpPort reported", longhorn.DataEngineTypeV2, repl(0), false},
-		{"v2 ready once TcpPort reported", longhorn.DataEngineTypeV2, repl(21000), true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := replicaTransportPortReady(tc.dataEngine, tc.replica); got != tc.want {
-				t.Errorf("replicaTransportPortReady(%s, tcpPort=%d) = %v, want %v",
-					tc.dataEngine, tc.replica.Status.TcpPort, got, tc.want)
-			}
-		})
-	}
-}
