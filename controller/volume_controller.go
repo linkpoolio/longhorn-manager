@@ -5921,6 +5921,15 @@ func (c *VolumeController) prepareReplicasAndEngineForTargetNode(v *longhorn.Vol
 			log.Warnf("Replica %v is running but Port is empty", r.Name)
 			continue
 		}
+		if !replicaTransportPortReady(v.Spec.DataEngine, r) {
+			// Same rule as the attach path: a v2 replica must report its
+			// transport (TCP) port before it is added, so the migration engine
+			// attaches with a complete transport-address map rather than
+			// falling back to dialing the RDMA-primary address over TCP.
+			log.Warnf("Replica %v is running but its transport (TCP) port is not reported yet; waiting before adding to the migration engine", r.Name)
+			allMigrationReplicasReady = false
+			continue
+		}
 		replicaAddressMap[r.Name] = imutil.GetURL(r.Status.StorageIP, r.Status.Port)
 	}
 	if migrationEngine.Spec.DesireState != longhorn.InstanceStateStopped {
