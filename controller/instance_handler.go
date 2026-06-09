@@ -74,6 +74,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -95,6 +97,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -111,6 +115,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 			status.IP = ""
 			status.StorageIP = ""
 			status.Port = 0
+			status.TcpPort = 0
+			status.RdmaPort = 0
 			status.UblkID = 0
 			status.UUID = ""
 			h.resetInstanceErrorCondition(status)
@@ -132,6 +138,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -156,6 +164,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -271,6 +281,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -284,6 +296,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -296,6 +310,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
