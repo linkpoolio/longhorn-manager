@@ -2496,6 +2496,21 @@ func (c *VolumeController) openVolumeDependentResources(v *longhorn.Volume, e *l
 			log.WithField("replica", r.Name).Warn("Replica is running but Port is empty")
 			continue
 		}
+		if !replicaTransportPortReady(v.Spec.DataEngine, r) {
+			// v2 only: Status.Port is the replica's primary listener (the RDMA
+			// port on an RDMA storage node), but the engine must dial the
+			// transport-qualified address from replicaTransportAddressMap,
+			// which is built from Status.TcpPort/RdmaPort. Admitting the
+			// replica on Status.Port alone -- before its transport ports are
+			// reported -- yields an empty transport map at engine create, and
+			// the engine then falls back to dialing the RDMA-primary address
+			// over TCP (connection refused). Defer admission until the
+			// transport port is reported so the engine always attaches with a
+			// complete map. The rebased instance manager always reports
+			// TcpPort for an exposed v2 replica, so this is a brief wait.
+			log.WithField("replica", r.Name).Warn("Replica is running but its transport (TCP) port is not reported yet; waiting for a complete transport-address map before attaching")
+			continue
+		}
 		if _, ok := e.Spec.ReplicaAddressMap[r.Name]; !ok && util.IsVolumeMigrating(v) &&
 			e.Spec.NodeID == v.Spec.NodeID {
 			// The volume is migrating from this engine. Don't allow new replicas to be added until migration is
@@ -6540,6 +6555,21 @@ func (c *VolumeController) syncVolumeOnDemandSnapshotStatus(v *longhorn.Volume, 
 	// All relevant snapshots have at least one checksum, and we have fresh results where possible. Acknowledge this request.
 	v.Status.LastOnDemandSnapshotHashingCompleteAt = v.Spec.SnapshotHashingRequestedAt
 	return nil
+}
+
+// replicaTransportPortReady reports whether a replica has advertised the
+// transport listener port needed to build a complete entry in the engine's
+// replicaTransportAddressMap. A v1 replica has no transport map and is always
+// ready in this sense. A v2 replica is ready once it reports a TCP port: the
+// rebased instance manager always exposes a TCP listener for a v2 replica (the
+// single TCP port on a TCP node, or the TCP fallback alongside the RDMA
+// primary on an RDMA node), so a zero TcpPort means the replica has not
+// finished reporting yet and must not be attached on its bare Status.Port.
+func replicaTransportPortReady(dataEngine longhorn.DataEngineType, r *longhorn.Replica) bool {
+	if !types.IsDataEngineV2(dataEngine) {
+		return true
+	}
+	return r.Status.TcpPort != 0
 }
 
 // buildReplicaTransportAddressMap builds the transport-qualified address map
