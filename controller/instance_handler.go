@@ -400,8 +400,19 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 		// the current IM via the disk lookup; sync the status field so
 		// downstream reconcilers don't follow a dangling pointer.
 		if status.InstanceManagerName != "" && status.InstanceManagerName != im.Name {
-			log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
-			status.InstanceManagerName = im.Name
+			// Only heal the ref when the resolved IM actually reports this
+			// instance in its status instance maps. Otherwise (e.g. the
+			// instance never started there) keep the stale ref and let the
+			// normal not-found handling reset the instance state instead of
+			// silently repointing it at an IM that does not own it.
+			imInstances, err := h.getInstancesFromInstanceManager(runtimeObj, im)
+			if err != nil {
+				return err
+			}
+			if _, exists := imInstances[instanceName]; exists {
+				log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
+				status.InstanceManagerName = im.Name
+			}
 		}
 	}
 
