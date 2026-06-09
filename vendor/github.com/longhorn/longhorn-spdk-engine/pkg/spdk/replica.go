@@ -324,8 +324,12 @@ func (r *Replica) prepareIPAndPorts(portCount int32, superiorPortAllocator *comm
 		return err
 	}
 
-	// Always reserved the 1st port for replica expose and the rest for rebuilding
-	bitmap, err := commonbitmap.NewBitmap(r.PortStart+1, r.PortEnd)
+	// Reserve the listener ports for replica expose and hand the rest to the
+	// local rebuild/clone allocator. On dual-listener (RDMA) replicas the
+	// first TWO ports are listeners (RDMA primary at PortStart, TCP fallback
+	// at PortStart+1), so the rebuild allocator must start at PortStart+2 —
+	// the same reservation restoreFromRecord applies.
+	bitmap, err := commonbitmap.NewBitmap(r.rebuildPortAllocatorStart(), r.PortEnd)
 	if err != nil {
 		return err
 	}
@@ -1153,7 +1157,7 @@ func (r *Replica) Create(spdkClient *spdkclient.Client, portCount int32, superio
 	}
 	// On RDMA-capable nodes also add a secondary TCP listener so TCP-only
 	// engines can still attach to this replica (no-op when primary is TCP).
-	if err := r.addTCPFallbackListener(spdkClient, r.Nqn, r.PortStart); err != nil {
+	if err := r.addTCPFallbackListener(spdkClient, r.Nqn, r.IP, r.PortStart); err != nil {
 		return nil, err
 	}
 
@@ -1317,9 +1321,7 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 		updateRequired = true
 	}
 
-	if err := removeReplicaRecord(r.metadataDir, r.Name); err != nil {
-		r.log.WithError(err).Warn("Failed to remove persisted replica record during cleanup delete")
-	}
+	r.finishDeleteRecord(cleanupRequired)
 
 	if !cleanupRequired {
 		return nil
@@ -1341,6 +1343,22 @@ func (r *Replica) Delete(spdkClient *spdkclient.Client, cleanupRequired bool, su
 	r.log.Info("Deleted replica with all possible lvols")
 
 	return nil
+}
+
+// finishDeleteRecord drops the persisted replica record when, and only when,
+// the delete is a real cleanup. A cleanly-stopped replica (cleanupRequired=
+// false) must keep its record: ReplicaGet/ReplicaList are record-driven and
+// BuildReplicaFromRecord derives the legitimate Stopped state from a record
+// whose head lvol is still on disk. Removing the record on a clean stop made
+// the replica invisible to the manager and broke the salvage flow, which
+// gates on Status.CurrentState=Stopped.
+func (r *Replica) finishDeleteRecord(cleanupRequired bool) {
+	if !cleanupRequired {
+		return
+	}
+	if err := removeReplicaRecord(r.metadataDir, r.Name); err != nil {
+		r.log.WithError(err).Warn("Failed to remove persisted replica record during cleanup delete")
+	}
 }
 
 func (r *Replica) Get() (pReplica *spdkrpc.Replica) {
@@ -2460,8 +2478,11 @@ func (r *Replica) SnapshotCloneSrcStart(spdkClient *spdkclient.Client, snapshotN
 	}
 
 	dstCloningLvolName := GetReplicaCloningLvolName(dstReplicaName)
-	dstCloningBdevName, err := connectNVMfBdevWithReconnect(spdkClient, dstCloningLvolName, dstCloningLvolAddress, r.transport(),
-		rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval)
+	// The cloning lvol is exposed on a single dedicated listener; the legacy
+	// +1 TCP fallback only exists for replica primary listeners, so it stays
+	// disabled here.
+	dstCloningBdevName, _, _, err := connectNVMfBdevWithReconnect(spdkClient, dstCloningLvolName, dstCloningLvolAddress, r.transport(),
+		rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval, false)
 	if err != nil {
 		return err
 	}
@@ -2672,7 +2693,10 @@ func (r *Replica) rebuildingSrcAttachNoLock(spdkClient *spdkclient.Client, dstRe
 		return nil
 	}
 
-	r.rebuildingSrcCache.dstRebuildingBdevName, err = connectNVMfBdevWithReconnect(spdkClient, dstRebuildingLvolName, dstRebuildingLvolAddress, r.transport(), rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval)
+	// The dst rebuilding lvol is exposed on a single dedicated listener; the
+	// legacy +1 TCP fallback only exists for replica primary listeners, so it
+	// stays disabled here.
+	r.rebuildingSrcCache.dstRebuildingBdevName, _, _, err = connectNVMfBdevWithReconnect(spdkClient, dstRebuildingLvolName, dstRebuildingLvolAddress, r.transport(), rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval, false)
 	if err != nil {
 		return errors.Wrapf(err, "failed to connect rebuilding lvol %s with address %s as a NVMe bdev for replica %s rebuilding src attach", dstRebuildingLvolName, dstRebuildingLvolAddress, r.Name)
 	}
@@ -3100,8 +3124,11 @@ func (r *Replica) RebuildingDstStart(spdkClient *spdkclient.Client, srcReplicaNa
 	}
 
 	externalSnapshotLvolName := GetReplicaSnapshotLvolName(srcReplicaName, externalSnapshotName)
-	externalSnapshotBdevName, err := connectNVMfBdevWithReconnect(spdkClient, externalSnapshotLvolName, externalSnapshotAddress, r.transport(),
-		rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval)
+	// The exposed src snapshot lives on a single dedicated listener; the
+	// legacy +1 TCP fallback only exists for replica primary listeners, so it
+	// stays disabled here.
+	externalSnapshotBdevName, _, _, err := connectNVMfBdevWithReconnect(spdkClient, externalSnapshotLvolName, externalSnapshotAddress, r.transport(),
+		rebuildCtrlrLossTimeoutSec, rebuildReconnectDelaySec, rebuildFastIOFailTimeoutSec, maxRetries, retryInterval, false)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to connect the external src snapshot lvol %s with address %s as a NVMf bdev for dst replica %v rebuilding start", externalSnapshotLvolName, externalSnapshotAddress, r.Name)
 	}
@@ -4378,6 +4405,18 @@ func (r *Replica) tcpFallbackPort() int32 {
 	return tcpFallbackPortFor(r.PortStart)
 }
 
+// rebuildPortAllocatorStart returns the first port handed to the replica's
+// local rebuild/clone port allocator. Listener ports are excluded: PortStart
+// is the primary listener, and on dual-listener (RDMA) replicas PortStart+1
+// is the TCP fallback listener (addTCPFallbackListener) — handing it to the
+// rebuild allocator would collide with the fallback listener.
+func (r *Replica) rebuildPortAllocatorStart() int32 {
+	if r.transport().IsRDMA() {
+		return r.PortStart + 2
+	}
+	return r.PortStart + 1
+}
+
 func (r *Replica) listenerPortsForTransport() (tcpPort, rdmaPort int32) {
 	if r.PortStart == 0 {
 		return 0, 0
@@ -4422,7 +4461,7 @@ func getExposedPortForTransport(subsystem *spdktypes.NvmfSubsystem, trtype spdkt
 
 	return 0, fmt.Errorf("cannot find a %s exposed port in the NVMf subsystem", trtype)
 }
-func (r *Replica) addTCPFallbackListener(spdkClient *spdkclient.Client, nqn string, primaryPort int32) error {
+func (r *Replica) addTCPFallbackListener(spdkClient *spdkclient.Client, nqn, ip string, primaryPort int32) error {
 	if r.transport() == NvmfTransportTCP {
 		return nil
 	}
@@ -4431,13 +4470,13 @@ func (r *Replica) addTCPFallbackListener(spdkClient *spdkclient.Client, nqn stri
 	}
 	fallbackPort := strconv.Itoa(int(tcpFallbackPortFor(primaryPort)))
 	if err := spdkClient.EnsureNvmfTransport(spdktypes.NvmeTransportTypeTCP); err != nil {
-		return errors.Wrapf(err, "failed to ensure TCP transport before adding fallback listener on %s:%s for nqn %s", r.IP, fallbackPort, nqn)
+		return errors.Wrapf(err, "failed to ensure TCP transport before adding fallback listener on %s:%s for nqn %s", ip, fallbackPort, nqn)
 	}
 	if _, err := spdkClient.NvmfSubsystemAddListener(
-		nqn, r.IP, fallbackPort,
+		nqn, ip, fallbackPort,
 		spdktypes.NvmeTransportTypeTCP, spdktypes.NvmeAddressFamilyIPv4,
 	); err != nil {
-		return errors.Wrapf(err, "failed to add TCP fallback listener on %s:%s for nqn %s", r.IP, fallbackPort, nqn)
+		return errors.Wrapf(err, "failed to add TCP fallback listener on %s:%s for nqn %s", ip, fallbackPort, nqn)
 	}
 	return nil
 }
@@ -4445,13 +4484,16 @@ func (r *Replica) restoreFromRecord(rec *ReplicaRecord) error {
 	if rec == nil {
 		return nil
 	}
-	bitmap, err := commonbitmap.NewBitmap(rec.PortStart+2, rec.PortEnd)
-	if err != nil {
-		return err
-	}
 	r.IP = rec.IP
 	r.PortStart = rec.PortStart
 	r.PortEnd = rec.PortEnd
+	// Exclude the listener ports, mirroring prepareIPAndPorts on fresh create
+	// (PortStart+1 on TCP nodes, PortStart+2 on dual-listener RDMA nodes).
+	bitmap, err := commonbitmap.NewBitmap(r.rebuildPortAllocatorStart(), r.PortEnd)
+	if err != nil {
+		r.PortStart, r.PortEnd = 0, 0
+		return err
+	}
 	r.portAllocator = bitmap
 	r.log.Infof("Restored replica port range [%d, %d] from persisted record", rec.PortStart, rec.PortEnd)
 	return nil

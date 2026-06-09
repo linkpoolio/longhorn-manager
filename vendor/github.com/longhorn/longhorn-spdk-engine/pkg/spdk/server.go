@@ -121,7 +121,21 @@ func NewServer(ctx context.Context, portStart, portEnd int32) (*Server, error) {
 		return nil, err
 	}
 
-	bitmap, err := commonbitmap.NewBitmap(portStart, portEnd)
+	// Seed the port allocator with the port ranges persisted by replicas and
+	// engine targets that survived an spdk_tgt/IM restart. Restored replicas
+	// reuse their persisted ranges (Replica.restoreFromRecord) and restored
+	// engine targets keep their listener port without re-allocating, so the
+	// allocator must consider those ranges taken before any create can run;
+	// otherwise a fresh create could collide with a restored instance.
+	replicaRecords, recErr := loadReplicaRecords(types.MetadataDir)
+	if recErr != nil {
+		logrus.WithError(recErr).Warn("Failed to load replica records for port reservation seeding; continuing without replica reservations")
+	}
+	engineRecords, recErr := loadEngineRecords(types.MetadataDir)
+	if recErr != nil {
+		logrus.WithError(recErr).Warn("Failed to load engine records for port reservation seeding; continuing without engine reservations")
+	}
+	bitmap, err := newPortAllocatorWithReservations(portStart, portEnd, collectReservedPortRanges(replicaRecords, engineRecords))
 	if err != nil {
 		return nil, err
 	}
@@ -1146,6 +1160,12 @@ func (s *Server) recoverEngines() {
 		e := NewEngine(rec.Name, rec.VolumeName, rec.Frontend, rec.SpecSize, transport, s.updateChs[types.InstanceTypeEngine], 0)
 		e.metadataDir = s.metadataDir
 		e.restoreFromRecord(rec)
+		// Mark Running before any validation has happened. This is an
+		// accepted tradeoff: the manager's first EngineGet must not see
+		// NotFound (it would fall back to EngineCreate mid-recovery), and a
+		// stale Running is corrected by the next verify() tick, whose
+		// ValidateAndUpdate reconciles the record against live SPDK state and
+		// demotes the engine to Error if the RAID/base bdevs are gone.
 		e.State = types.InstanceStateRunning
 		s.engineMap[name] = e
 	}
@@ -1199,9 +1219,10 @@ func (s *Server) recoverEngineFrontends(ctx context.Context) {
 		ef := NewEngineFrontend(record.Name, record.EngineName, record.VolumeName,
 			record.Frontend, record.SpecSize, 0, 0, s.updateChs[types.InstanceTypeEngineFrontend])
 		ef.metadataDir = s.metadataDir
-		// Tag with the node's current transport so a switchover after recovery
-		// can explicitly release an old RDMA path's HCA queue pair.
-		ef.NvmeTcpFrontend.Transport = s.nodeTransport
+		// Tag with the engine target's actual transport (TCP; see
+		// EngineFrontendCreate). RDMA-specific teardown at switchover keys on
+		// the transport observed on the live controller, not on this tag.
+		ef.NvmeTcpFrontend.Transport = engineFrontendTargetTransport()
 		ef.VolumeNQN = record.VolumeNQN
 		ef.VolumeNGUID = record.VolumeNGUID
 		ef.ActivePath = record.ActivePath
