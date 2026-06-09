@@ -2541,8 +2541,11 @@ func (c *VolumeController) openVolumeDependentResources(v *longhorn.Volume, e *l
 	e.Spec.UblkNumberOfQueue = v.Spec.UblkNumberOfQueue
 	// QosLimits propagated to engine; engine controller forwards to spdk
 	// engine via gRPC at create time, and on subsequent live updates by
-	// calling EngineSetQosLimit when the spec changes.
-	e.Spec.QosLimits = v.Spec.QosLimits
+	// calling EngineSetQosLimit when the spec changes. Only meaningful for
+	// the v2 (SPDK) data engine, so do not let v1 engines carry the field.
+	if types.IsDataEngineV2(v.Spec.DataEngine) {
+		e.Spec.QosLimits = v.Spec.QosLimits
+	}
 
 	// For v2 data engine, update EngineFrontend to start after Engine is running.
 	// Skip the target update when an engine switchover is in progress, because
