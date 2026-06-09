@@ -1114,21 +1114,21 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 	}
 
 	// If the underlying kube node is unschedulable (cordoned, mid-drain),
-	// defer all IM cleanup until the node is back schedulable. Kubelet's
+	// defer v2 IM CR deletion until the node is back schedulable. Kubelet's
 	// eviction respects terminationGracePeriodSeconds and runs the v2 IM's
 	// preStop hook, which drains NVMe-oF listeners and exits SPDK cleanly.
 	// Deleting the IM CR here cascades to a redundant pods.Delete that can
 	// race kubelet's eviction and skip preStop entirely. Once the pod has
 	// terminated naturally, a later sync (after uncordon) cleans up any
-	// orphan IM CRs.
+	// orphan IM CRs. Only the v2 deletion path is deferred: IM creation and
+	// image-mismatch cleanup for v1 IMs keep upstream behavior so a cordoned
+	// node does not stall the rest of the IM sync for the whole cordon
+	// duration.
 	kubeNode, err := nc.ds.GetKubernetesNodeRO(node.Name)
 	if err != nil && !datastore.ErrorIsNotFound(err) {
 		return err
 	}
-	if kubeNode != nil && kubeNode.Spec.Unschedulable {
-		log.Debugf("Skipping IM cleanup on unschedulable node %v", node.Name)
-		return nil
-	}
+	isNodeCordoned := kubeNode != nil && kubeNode.Spec.Unschedulable
 
 	imTypeDataEngines := nc.getImTypeDataEngines(node)
 
@@ -1184,6 +1184,10 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 					}
 				}
 				if cleanupRequired {
+					if isNodeCordoned && types.IsDataEngineV2(im.Spec.DataEngine) {
+						log.Debugf("Skipping cleanup of v2 instance manager %v on unschedulable node %v to let kubelet eviction run its preStop hook", im.Name, node.Name)
+						continue
+					}
 					log.Infof("Cleaning up the redundant instance manager %v when there is no running/starting instance", im.Name)
 					if err := nc.ds.DeleteInstanceManager(im.Name); err != nil {
 						return err
