@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"strings"
 	"sync"
@@ -38,6 +39,11 @@ const (
 
 	kernelConfigDir = "/host/boot/"
 	systemConfigDir = "/host/etc/"
+
+	// sysClassInfinibandDir is the sysfs directory that enumerates RDMA-capable
+	// devices. It is read in the host namespace (lhns), like the other host
+	// probes in this file.
+	sysClassInfinibandDir = "/sys/class/infiniband"
 )
 
 var (
@@ -185,6 +191,26 @@ func (m *EnvironmentCheckMonitor) environmentCheck(kubeNode *corev1.Node) *Colle
 func (m *EnvironmentCheckMonitor) checkNvmfRDMACapability(kubeNode *corev1.Node, collectedData *CollectedEnvironmentCheckInfo) {
 	rdmaCapable := m.probeNvmfRDMAModules(kubeNode, collectedData)
 
+	// Loaded kernel modules alone do not mean the node can serve RDMA: distro
+	// kernels often ship nvme_rdma/ib_core without any RDMA-capable NIC being
+	// present. Require an actual device under /sys/class/infiniband before
+	// labelling the node rdma.
+	if rdmaCapable && !hasRDMADevice(sysClassInfinibandDir, lhns.ReadDirectory) {
+		collectedData.conditions = types.SetCondition(collectedData.conditions,
+			longhorn.NodeConditionTypeNvmfRDMACapable, longhorn.ConditionStatusFalse,
+			string(longhorn.NodeConditionReasonNvmfRDMADeviceMissing),
+			fmt.Sprintf("NVMf RDMA kernel modules are loaded but no RDMA device is present under %v; node will use TCP only", sysClassInfinibandDir))
+		rdmaCapable = false
+	}
+
+	// Never overwrite an existing label: any pre-existing value (including one
+	// this monitor applied earlier) is treated as operator-owned. Re-applying
+	// it with server-side apply fights other field managers (409 conflict spam)
+	// and silently reverts deliberate operator overrides.
+	if _, exists := kubeNode.Labels[types.NodeNvmfTransportLabelKey]; exists {
+		return
+	}
+
 	labelValue := types.NodeNvmfTransportLabelValueTCP
 	if rdmaCapable {
 		labelValue = types.NodeNvmfTransportLabelValueRDMA
@@ -192,6 +218,18 @@ func (m *EnvironmentCheckMonitor) checkNvmfRDMACapability(kubeNode *corev1.Node,
 	if err := m.ds.SetKubernetesNodeLabel(kubeNode.Name, types.NodeNvmfTransportLabelKey, labelValue); err != nil {
 		m.logger.WithError(err).Warnf("Failed to set %s label on node %s", types.NodeNvmfTransportLabelKey, kubeNode.Name)
 	}
+}
+
+// hasRDMADevice reports whether the sysfs infiniband class directory exists
+// and contains at least one device entry. readDirectory is injected so the
+// production caller can read it in the host namespace (lhns.ReadDirectory)
+// while tests can probe a plain directory.
+func hasRDMADevice(directory string, readDirectory func(string) ([]fs.DirEntry, error)) bool {
+	entries, err := readDirectory(directory)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
 }
 
 func (m *EnvironmentCheckMonitor) probeNvmfRDMAModules(kubeNode *corev1.Node, collectedData *CollectedEnvironmentCheckInfo) bool {

@@ -34,6 +34,7 @@ const (
 	NodeConditionReasonHugePagesNotConfigured    = "HugePagesNotConfigured"
 	NodeConditionReasonInsufficientHugePages     = "InsufficientHugePages"
 	NodeConditionReasonNvmfRDMAModulesMissing    = "NvmfRDMAModulesMissing"
+	NodeConditionReasonNvmfRDMADeviceMissing     = "NvmfRDMADeviceMissing"
 )
 
 const (
