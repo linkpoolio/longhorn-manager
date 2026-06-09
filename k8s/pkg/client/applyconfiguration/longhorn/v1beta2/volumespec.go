@@ -94,6 +94,13 @@ type VolumeSpecApplyConfiguration struct {
 	// If SnapshotHashingRequestedAt differs from LastOnDemandSnapshotHashingCompleteAt, it indicates that a hashing request
 	// is still in progress, and a new request will be rejected.
 	SnapshotHashingRequestedAt *string `json:"snapshotHashingRequestedAt,omitempty"`
+	// QosLimits caps aggregate raid bdev I/O for v2 volumes via SPDK's
+	// bdev_set_qos_limit on the engine's raid bdev. Mapped 1:1 to SPDK
+	// parameters. All-zero (or nil) means unlimited (the default). Rebuild
+	// traffic — which goes engine→replica directly via NVMe-oF rather than
+	// through the raid bdev — is not subject to this cap.
+	// Currently v2 only; v1 ignores QosLimits.
+	QosLimits *QosLimitsApplyConfiguration `json:"qosLimits,omitempty"`
 }
 
 // VolumeSpecApplyConfiguration constructs a declarative configuration of the VolumeSpec type for use with
@@ -439,5 +446,13 @@ func (b *VolumeSpecApplyConfiguration) WithRebuildConcurrentSyncLimit(value int)
 // If called multiple times, the SnapshotHashingRequestedAt field is set to the value of the last call.
 func (b *VolumeSpecApplyConfiguration) WithSnapshotHashingRequestedAt(value string) *VolumeSpecApplyConfiguration {
 	b.SnapshotHashingRequestedAt = &value
+	return b
+}
+
+// WithQosLimits sets the QosLimits field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the QosLimits field is set to the value of the last call.
+func (b *VolumeSpecApplyConfiguration) WithQosLimits(value *QosLimitsApplyConfiguration) *VolumeSpecApplyConfiguration {
+	b.QosLimits = value
 	return b
 }
