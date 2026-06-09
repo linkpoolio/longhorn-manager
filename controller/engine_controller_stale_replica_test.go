@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	longhorn "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
 )
 
@@ -30,10 +32,17 @@ func TestShouldRecreateStaleV2Engine(t *testing.T) {
 		}
 	}
 
+	healthyVolume := &longhorn.Volume{}
+	migratingVolume := &longhorn.Volume{
+		Spec: longhorn.VolumeSpec{MigrationNodeID: "node-2"},
+	}
+
 	tests := []struct {
-		name   string
-		engine *longhorn.Engine
-		want   bool
+		name               string
+		engine             *longhorn.Engine
+		volume             *longhorn.Volume // defaults to healthyVolume unless volumeLookupFailed
+		volumeLookupFailed bool             // pass a nil volume to simulate a failed volume lookup
+		want               bool
 	}{
 		{
 			name:   "nil engine",
@@ -124,11 +133,54 @@ func TestShouldRecreateStaleV2Engine(t *testing.T) {
 				map[string]string{"r1": beyondTimeout}),
 			want: true,
 		},
+		{
+			name: "engine being deleted",
+			engine: func() *longhorn.Engine {
+				e := makeEngine(longhorn.InstanceStateRunning, "",
+					map[string]longhorn.ReplicaMode{"r1": longhorn.ReplicaModeERR},
+					map[string]string{"r1": beyondTimeout})
+				ts := metav1.Now()
+				e.DeletionTimestamp = &ts
+				return e
+			}(),
+			want: false,
+		},
+		{
+			name: "frontend disabled",
+			engine: func() *longhorn.Engine {
+				e := makeEngine(longhorn.InstanceStateRunning, "",
+					map[string]longhorn.ReplicaMode{"r1": longhorn.ReplicaModeERR},
+					map[string]string{"r1": beyondTimeout})
+				e.Spec.DisableFrontend = true
+				return e
+			}(),
+			want: false,
+		},
+		{
+			name: "volume is migrating",
+			engine: makeEngine(longhorn.InstanceStateRunning, "",
+				map[string]longhorn.ReplicaMode{"r1": longhorn.ReplicaModeERR},
+				map[string]string{"r1": beyondTimeout}),
+			volume: migratingVolume,
+			want:   false,
+		},
+		{
+			name: "volume lookup failed",
+			engine: makeEngine(longhorn.InstanceStateRunning, "",
+				map[string]longhorn.ReplicaMode{"r1": longhorn.ReplicaModeERR},
+				map[string]string{"r1": beyondTimeout}),
+			volumeLookupFailed: true,
+			want:               false,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := shouldRecreateStaleV2Engine(tc.engine, now)
+			volume := tc.volume
+			if volume == nil && !tc.volumeLookupFailed {
+				volume = healthyVolume
+			}
+			got, reason := shouldRecreateStaleV2Engine(tc.engine, volume, now)
 			require.Equal(t, tc.want, got)
 			if tc.want {
 				require.NotEmpty(t, reason)

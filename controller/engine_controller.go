@@ -1007,11 +1007,26 @@ func (m *EngineMonitor) sync() bool {
 	return false
 }
 
-func shouldRecreateStaleV2Engine(engine *longhorn.Engine, now time.Time) (bool, string) {
+func shouldRecreateStaleV2Engine(engine *longhorn.Engine, volume *longhorn.Volume, now time.Time) (bool, string) {
 	if engine == nil {
 		return false, ""
 	}
 	if !types.IsDataEngineV2(engine.Spec.DataEngine) {
+		return false, ""
+	}
+	// The engine is already being deleted; do not race the deletion.
+	if engine.DeletionTimestamp != nil {
+		return false, ""
+	}
+	// An engine with a disabled frontend (e.g. during auto-salvage or
+	// maintenance attachment) has no endpoint by design.
+	if engine.Spec.DisableFrontend {
+		return false, ""
+	}
+	// A migration target engine never has an endpoint by design; deleting it
+	// would break the live migration. If the owning volume could not be
+	// resolved, fail safe and skip the recreation.
+	if volume == nil || volume.Spec.MigrationNodeID != "" {
 		return false, ""
 	}
 	if engine.Status.CurrentState != longhorn.InstanceStateRunning {
@@ -1126,7 +1141,15 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 	engine.Status.ReplicaModeMap = currentReplicaModeMap
 	engine.Status.ReplicaTransitionTimeMap = currentReplicaTransitionTimeMap
 
-	if recreate, reason := shouldRecreateStaleV2Engine(engine, time.Now()); recreate {
+	// shouldRecreateStaleV2Engine needs the owning volume to rule out migration
+	// engines (those never have an endpoint by design). On lookup failure pass
+	// nil so the predicate fails safe and skips the recreation.
+	staleCheckVolume, volErr := m.ds.GetVolumeRO(engine.Spec.VolumeName)
+	if volErr != nil {
+		m.logger.WithError(volErr).Warnf("Failed to get volume %v while evaluating stale v2 engine recreation; skipping recreation", engine.Spec.VolumeName)
+		staleCheckVolume = nil
+	}
+	if recreate, reason := shouldRecreateStaleV2Engine(engine, staleCheckVolume, time.Now()); recreate {
 		m.logger.Warnf("Deleting Engine CR %s to recover from stale replica address: %s", engine.Name, reason)
 		m.eventRecorder.Eventf(engine, corev1.EventTypeWarning, constant.EventReasonFaulted,
 			"Recreating engine due to stale replica addresses: %s", reason)
