@@ -2774,6 +2774,9 @@ func (ec *EngineController) Upgrade(e *longhorn.Engine, log *logrus.Entry) (err 
 	log.Infof("Engine has been upgraded from %v to %v", e.Status.CurrentImage, e.Spec.Image)
 	e.Status.CurrentImage = e.Spec.Image
 	e.Status.CurrentReplicaAddressMap = e.Spec.UpgradedReplicaAddressMap
+	// Clear the transport map: it mirrors the pre-upgrade replicas' per-replica
+	// ports, and a v2 live upgrade must rebuild it for the new replicas.
+	e.Status.CurrentReplicaTransportAddressMap = nil
 	// reset ReplicaModeMap to reflect the new replicas
 	e.Status.ReplicaModeMap = nil
 	e.Status.ReplicaTransitionTimeMap = nil

@@ -4200,6 +4200,9 @@ func (c *VolumeController) finishLiveEngineUpgrade(v *longhorn.Volume, e *longho
 	}, v.Spec.Image)
 
 	e.Spec.ReplicaAddressMap = e.Spec.UpgradedReplicaAddressMap
+	// Clear the transport map: it mirrors the pre-upgrade replicas' per-replica
+	// ports, and a v2 live upgrade must rebuild it for the new replicas.
+	e.Spec.ReplicaTransportAddressMap = nil
 	e.Spec.UpgradedReplicaAddressMap = map[string]string{}
 	// cleanupCorruptedOrStaleReplicas() will take care of old replicas
 	log.Infof("Engine %v has been upgraded from %v to %v", e.Name, v.Status.CurrentImage, v.Spec.Image)
