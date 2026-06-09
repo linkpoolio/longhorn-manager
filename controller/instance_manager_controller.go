@@ -1170,7 +1170,13 @@ func (imc *InstanceManagerController) isSettingHugepageLimitSynced(im *longhorn.
 		return false, err
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	// Use the effective size (honoring the per-node spdk-memory-size label
+	// override), not the raw cluster setting -- this must match the value the
+	// pod is actually built with in createInstanceManagerPodSpec. Comparing
+	// against the cluster setting on a node with the override flagged the pod as
+	// permanently out-of-sync, driving an endless delete/recreate loop once the
+	// node was drained of running instances.
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
 		return false, err
 	}
@@ -1199,7 +1205,10 @@ func (imc *InstanceManagerController) isSettingMemorySizeArgSynced(im *longhorn.
 		return true, nil
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	// Effective size (honoring the per-node spdk-memory-size override) so the
+	// expected --spdk-memory-size matches what the pod is built with; see
+	// isSettingHugepageLimitSynced for the loop this prevents.
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
 		return false, err
 	}
@@ -1232,7 +1241,11 @@ func (imc *InstanceManagerController) nodeHasEnoughHugepageTotalCapacity(im *lon
 		return true, nil
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	// Effective size (honoring the per-node spdk-memory-size override): the
+	// capacity check must be against the size the pod will actually request,
+	// otherwise a node with a large override would be judged to have capacity
+	// for the small cluster-default size and wrongly allow a delete.
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
 		return false, err
 	}

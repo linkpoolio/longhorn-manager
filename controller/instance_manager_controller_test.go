@@ -842,3 +842,72 @@ func (s *TestSuite) TestNodeHasEnoughHugepageTotalCapacity(c *C) {
 		c.Assert(ok, Equals, tc.expected)
 	}
 }
+
+// On storage nodes the per-node node.longhorn.io/spdk-memory-size label overrides
+// the cluster data-engine-memory-size setting, and createInstanceManagerPodSpec
+// builds the pod with that override. The danger-zone sync checks must therefore
+// validate the pod against the *effective* size, not the cluster setting --
+// otherwise a node with the override is judged permanently out-of-sync and the
+// IM pod is deleted/recreated on every reconcile (the ma4-worker-1 loop).
+func (s *TestSuite) TestSpdkMemorySizeOverrideSynced(c *C) {
+	const clusterMemorySize = "1024"  // cluster data-engine-memory-size (MiB)
+	const overrideMemorySize = "16384" // per-node label override (MiB)
+
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+	kubeNodeIndexer := informerFactories.KubeInformerFactory.Core().V1().Nodes().Informer().GetIndexer()
+	sIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer()
+
+	imc, err := newTestInstanceManagerController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+	c.Assert(err, IsNil)
+
+	hpEnabled := newSetting(string(types.SettingNameDataEngineHugepageEnabled), `{"v2":"true"}`)
+	_, err = lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), hpEnabled, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(sIndexer.Add(hpEnabled), IsNil)
+	memSetting := newSetting(string(types.SettingNameDataEngineMemorySize), `{"v2":"`+clusterMemorySize+`"}`)
+	_, err = lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), memSetting, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(sIndexer.Add(memSetting), IsNil)
+
+	im := newInstanceManager(TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+		TestNode1, TestNode1, TestIP1, nil, nil, nil, longhorn.DataEngineTypeV2, TestInstanceManagerImage, false)
+
+	// A pod built the way the override node builds it: 16384, not the cluster 1024.
+	pod := newPod(&corev1.PodStatus{PodIP: TestIP1, Phase: corev1.PodRunning}, im.Name, im.Namespace, im.Spec.NodeID)
+	pod.Spec.Containers = []corev1.Container{{
+		Name: "instance-manager",
+		Args: []string{"--spdk-memory-size", overrideMemorySize},
+		Resources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceName("hugepages-2Mi"): resource.MustParse("16Gi")},
+		},
+	}}
+
+	kubeNode := newKubernetesNode(TestNode1, corev1.ConditionTrue, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionTrue)
+
+	// Without the label: effective size is the cluster setting, and the 16384 pod
+	// reads as out-of-sync (this is the pre-fix behavior that caused the loop).
+	c.Assert(kubeNodeIndexer.Add(kubeNode), IsNil)
+	sizeNoLabel, err := imc.getEffectiveSpdkMemorySize(im)
+	c.Assert(err, IsNil)
+	c.Assert(sizeNoLabel, Equals, int64(1024))
+	argSynced, err := imc.isSettingMemorySizeArgSynced(im, pod)
+	c.Assert(err, IsNil)
+	c.Assert(argSynced, Equals, false, Commentf("without label, 16384 pod must read out-of-sync vs cluster 1024"))
+
+	// With the label: effective size follows the override and the pod is in sync.
+	kubeNode.Labels = map[string]string{types.NodeSpdkMemorySizeLabelKey: overrideMemorySize}
+	c.Assert(kubeNodeIndexer.Update(kubeNode), IsNil)
+	sizeWithLabel, err := imc.getEffectiveSpdkMemorySize(im)
+	c.Assert(err, IsNil)
+	c.Assert(sizeWithLabel, Equals, int64(16384), Commentf("label override must win over cluster setting"))
+	argSynced, err = imc.isSettingMemorySizeArgSynced(im, pod)
+	c.Assert(err, IsNil)
+	c.Assert(argSynced, Equals, true, Commentf("with label, 16384 pod must read in-sync (no delete loop)"))
+	limitSynced, err := imc.isSettingHugepageLimitSynced(im, pod)
+	c.Assert(err, IsNil)
+	c.Assert(limitSynced, Equals, true, Commentf("with label, 16Gi hugepage limit must read in-sync"))
+}
