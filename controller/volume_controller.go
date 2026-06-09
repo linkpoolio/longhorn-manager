@@ -2918,7 +2918,7 @@ func (c *VolumeController) canInstanceManagerLaunchReplica(r *longhorn.Replica) 
 	}
 	defaultIM, err := c.ds.GetInstanceManagerByInstanceRO(r)
 	if err != nil {
-		if datastore.ErrorIsNotFound(err) || strings.Contains(err.Error(), "no running instance manager") {
+		if datastore.ErrorIsNotFound(err) || errors.Is(err, datastore.ErrNoRunningInstanceManager) {
 			return false, nil
 		}
 		return false, errors.Wrapf(err, "failed to find instance manager for replica %v", r.Name)

@@ -4810,6 +4810,11 @@ func filterInstanceManagers(nodeID string, dataEngine longhorn.DataEngineType, i
 	return nil, fmt.Errorf("ambiguous instance manager selection for node %v", nodeID)
 }
 
+// ErrNoRunningInstanceManager is returned when no running instance manager is
+// found among the candidates for a node. Callers should match it with
+// errors.Is instead of comparing error strings.
+var ErrNoRunningInstanceManager = errors.New("no running instance manager found")
+
 func findRunningInstanceManager(imMap map[string]*longhorn.InstanceManager) (*longhorn.InstanceManager, error) {
 	var runningIM *longhorn.InstanceManager
 	for _, im := range imMap {
@@ -4821,7 +4826,7 @@ func findRunningInstanceManager(imMap map[string]*longhorn.InstanceManager) (*lo
 		}
 	}
 	if runningIM == nil {
-		return nil, fmt.Errorf("no running instance manager found")
+		return nil, ErrNoRunningInstanceManager
 	}
 	return runningIM, nil
 }
