@@ -89,14 +89,24 @@ func NewInstanceServiceClientWithTLS(ctx context.Context, ctxCancel context.Canc
 
 type EngineCreateRequest struct {
 	ReplicaAddressMap map[string]string
-	Frontend          string
-	UblkQueueDepth    int
-	UblkNumberOfQueue int
-	InitiatorAddress  string
-	TargetAddress     string
-	UpgradeRequired   bool
-	SalvageRequested  bool
-	SnapshotMaxCount  int
+	// ReplicaTransportAddressMap carries transport-qualified addresses for each
+	// replica so the engine can pick whichever transport matches its own node
+	// transport at attach time. Optional; empty map causes the engine to fall
+	// back to ReplicaAddressMap dialed with the engine's replicaTransport.
+	ReplicaTransportAddressMap map[string]*rpc.ReplicaTransportAddresses
+	Frontend                   string
+	UblkQueueDepth             int
+	UblkNumberOfQueue          int
+	InitiatorAddress           string
+	TargetAddress              string
+	UpgradeRequired            bool
+	SalvageRequested           bool
+	SnapshotMaxCount           int
+	// QosLimits caps aggregate raid bdev I/O for this engine. Mapped into
+	// imrpc.SpdkInstanceSpec.qos_limits which the IM forwards to the
+	// spdk-engine via spdkrpc.EngineCreateRequest. All-zero / nil means
+	// unlimited (the default).
+	QosLimits *rpc.QosLimits
 }
 
 type EngineFrontendCreateRequest struct {
@@ -160,13 +170,15 @@ func (c *InstanceServiceClient) InstanceCreate(req *InstanceCreateRequest) (*api
 		switch req.InstanceType {
 		case types.InstanceTypeEngine:
 			spdkInstanceSpec = &rpc.SpdkInstanceSpec{
-				Size:              req.Size,
-				ReplicaAddressMap: req.Engine.ReplicaAddressMap,
-				Frontend:          req.Engine.Frontend,
-				SalvageRequested:  req.Engine.SalvageRequested,
-				SnapshotMaxCount:  int32(req.Engine.SnapshotMaxCount),
-				UblkQueueDepth:    int32(req.Engine.UblkQueueDepth),
-				UblkNumberOfQueue: int32(req.Engine.UblkNumberOfQueue),
+				Size:                       req.Size,
+				ReplicaAddressMap:          req.Engine.ReplicaAddressMap,
+				ReplicaTransportAddressMap: req.Engine.ReplicaTransportAddressMap,
+				Frontend:                   req.Engine.Frontend,
+				SalvageRequested:           req.Engine.SalvageRequested,
+				SnapshotMaxCount:           int32(req.Engine.SnapshotMaxCount),
+				UblkQueueDepth:             int32(req.Engine.UblkQueueDepth),
+				UblkNumberOfQueue:          int32(req.Engine.UblkNumberOfQueue),
+				QosLimits:                  req.Engine.QosLimits,
 			}
 		case types.InstanceTypeEngineFrontend:
 			spdkInstanceSpec = &rpc.SpdkInstanceSpec{
@@ -459,6 +471,36 @@ func (c *InstanceServiceClient) InstanceSwitchOverTarget(dataEngine, name, insta
 	}
 
 	return nil
+}
+
+// InstanceSetQosLimit sets per-instance QoS limits at runtime. Engine-only
+// (v2). Used by longhorn-manager to push StorageClass-derived QoS changes
+// onto attached volumes without re-creating them. Pass an all-zero
+// QosLimits to remove the cap.
+func (c *InstanceServiceClient) InstanceSetQosLimit(dataEngine, name, instanceType string, qosLimits *rpc.QosLimits) error {
+	if name == "" {
+		return fmt.Errorf("failed to set QoS on instance: missing required parameter name")
+	}
+	if qosLimits == nil {
+		return fmt.Errorf("failed to set QoS on instance: missing required parameter qosLimits (use all-zero fields for unlimited)")
+	}
+
+	driver, ok := rpc.DataEngine_value[getDataEngine(dataEngine)]
+	if !ok {
+		return fmt.Errorf("failed to set QoS on instance: invalid data engine %v", dataEngine)
+	}
+
+	client := c.getControllerServiceClient()
+	ctx, cancel := context.WithTimeout(context.Background(), types.GRPCServiceTimeout)
+	defer cancel()
+
+	_, err := client.InstanceSetQosLimit(ctx, &rpc.InstanceSetQosLimitRequest{
+		Name:       name,
+		Type:       instanceType,
+		DataEngine: rpc.DataEngine(driver),
+		QosLimits:  qosLimits,
+	})
+	return errors.Wrapf(err, "failed to set QoS on instance %v", name)
 }
 
 // InstanceDeleteTarget delete target for an instance.
