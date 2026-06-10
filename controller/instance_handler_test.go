@@ -454,6 +454,80 @@ func (s *TestSuite) TestReconcileInstanceState(c *C) {
 			false,
 		},
 
+		// stale IM ref heal: the named IM is gone but the resolved IM reports
+		// the instance, so the ref is healed to the resolved IM.
+		"engine stale instance manager ref healed when resolved im owns the instance": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{
+					ExistingInstance: {
+						Spec: longhorn.InstanceProcessSpec{
+							Name: ExistingInstance,
+						},
+						Status: longhorn.InstanceProcessStatus{
+							State:     longhorn.InstanceStateRunning,
+							PortStart: TestPort1,
+						},
+					},
+				},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(ExistingInstance, TestEngineImage, "stale-instance-manager", TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			newEngine(ExistingInstance, TestEngineImage, TestInstanceManagerName, TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			false,
+		},
+		// stale IM ref NOT healed: the resolved IM does not report the
+		// instance, so the stale ref is kept and the normal not-found path
+		// marks the instance error instead of repointing it.
+		"engine stale instance manager ref kept when resolved im does not own the instance": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(NonExistingInstance, TestEngineImage, "stale-instance-manager", TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			newEngine(NonExistingInstance, "", "stale-instance-manager", TestNode1, "", 0, true, longhorn.InstanceStateError, longhorn.InstanceStateRunning),
+			false,
+		},
+		// stale IM ref heal for a non-running instance: after an IM roll the
+		// stopped engine must be recreated on the resolved IM, but creation
+		// reads the stale ref first and errors hard on the deleted IM CR --
+		// the ref must be healed even though the resolved IM does not report
+		// the instance yet (it cannot: the instance is being created there).
+		// Regression: volumes stuck attaching after an IM roll. The mocked
+		// handler cannot surface the production GetInstance error, so this
+		// case pins that reconcile proceeds through the create path (the
+		// stale ref is healed, then cleared by the not-found sync);
+		// TestShouldHealStaleInstanceManagerRef pins the decision itself.
+		"engine stale instance manager ref healed for stopped instance pending recreation": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(NonExistingInstance, "", "stale-instance-manager", TestNode1, "", 0, false, longhorn.InstanceStateStopped, longhorn.InstanceStateRunning),
+			newEngine(NonExistingInstance, "", "", TestNode1, "", 0, false, longhorn.InstanceStateStopped, longhorn.InstanceStateRunning),
+			false,
+		},
+
 		// corner case1: invalid desireState
 		"engine gets invalid desire state": {
 			longhorn.InstanceTypeEngine,
@@ -679,4 +753,18 @@ func (s *TestSuite) TestCreateInstanceRecordsFailedStartingEvent(c *C) {
 	default:
 		c.Fatal("expected one FailedStarting event")
 	}
+}
+
+// The heal decision itself: heal on live handover (resolved IM owns the
+// instance) or whenever the instance is not Running (it must be recreated on
+// the resolved IM, and the creation path errors hard on a stale ref to a
+// deleted IM CR). Keep the stale ref only for a Running instance the resolved
+// IM does not report.
+func (s *TestSuite) TestShouldHealStaleInstanceManagerRef(c *C) {
+	c.Check(shouldHealStaleInstanceManagerRef(true, longhorn.InstanceStateRunning), Equals, true)
+	c.Check(shouldHealStaleInstanceManagerRef(true, longhorn.InstanceStateStopped), Equals, true)
+	c.Check(shouldHealStaleInstanceManagerRef(false, longhorn.InstanceStateStopped), Equals, true)
+	c.Check(shouldHealStaleInstanceManagerRef(false, longhorn.InstanceStateError), Equals, true)
+	c.Check(shouldHealStaleInstanceManagerRef(false, longhorn.InstanceState("")), Equals, true)
+	c.Check(shouldHealStaleInstanceManagerRef(false, longhorn.InstanceStateRunning), Equals, false)
 }
