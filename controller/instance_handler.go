@@ -343,6 +343,21 @@ func (h *InstanceHandler) getNameFromObj(obj runtime.Object) (string, error) {
 	return metadata.GetName(), nil
 }
 
+// shouldHealStaleInstanceManagerRef decides whether an instance's stale
+// status.InstanceManagerName (pointing at an IM CR that no longer exists) may
+// be rewritten to the freshly resolved IM. Heal when the resolved IM reports
+// the instance (live handover), or when the instance is not Running -- a
+// stopped/errored instance must be recreated on the resolved IM, and the
+// creation path reads the stale ref first (GetInstance), errors hard on the
+// deleted IM CR, and wedges the instance until the ref is fixed (observed as
+// four volumes stuck attaching after an IM roll). Only a Running instance not
+// reported by the resolved IM keeps its stale ref, so the normal not-found
+// handling resets it instead of silently repointing a live instance at an IM
+// that does not own it.
+func shouldHealStaleInstanceManagerRef(ownedByResolvedIM bool, currentState longhorn.InstanceState) bool {
+	return ownedByResolvedIM || currentState != longhorn.InstanceStateRunning
+}
+
 func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn.InstanceSpec, status *longhorn.InstanceStatus) (err error) {
 	runtimeObj, ok := obj.(runtime.Object)
 	if !ok {
@@ -400,16 +415,13 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 		// the current IM via the disk lookup; sync the status field so
 		// downstream reconcilers don't follow a dangling pointer.
 		if status.InstanceManagerName != "" && status.InstanceManagerName != im.Name {
-			// Only heal the ref when the resolved IM actually reports this
-			// instance in its status instance maps. Otherwise (e.g. the
-			// instance never started there) keep the stale ref and let the
-			// normal not-found handling reset the instance state instead of
-			// silently repointing it at an IM that does not own it.
+			// See shouldHealStaleInstanceManagerRef for the heal policy.
 			imInstances, err := h.getInstancesFromInstanceManager(runtimeObj, im)
 			if err != nil {
 				return err
 			}
-			if _, exists := imInstances[instanceName]; exists {
+			_, ownedByResolvedIM := imInstances[instanceName]
+			if shouldHealStaleInstanceManagerRef(ownedByResolvedIM, status.CurrentState) {
 				log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
 				status.InstanceManagerName = im.Name
 			}
