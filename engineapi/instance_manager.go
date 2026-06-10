@@ -16,6 +16,7 @@ import (
 	imclient "github.com/longhorn/longhorn-instance-manager/pkg/client"
 	immeta "github.com/longhorn/longhorn-instance-manager/pkg/meta"
 	imutil "github.com/longhorn/longhorn-instance-manager/pkg/util"
+	imrpc "github.com/longhorn/types/pkg/generated/imrpc"
 
 	"github.com/longhorn/longhorn-manager/types"
 	"github.com/longhorn/longhorn-manager/util"
@@ -288,6 +289,7 @@ func parseInstance(p *imapi.Instance) *longhorn.InstanceProcess {
 			NQN:        path.NQN,
 			NGUID:      path.NGUID,
 			ANAState:   path.ANAState,
+			Transport:  path.Transport,
 		})
 	}
 
@@ -306,6 +308,8 @@ func parseInstance(p *imapi.Instance) *longhorn.InstanceProcess {
 			Paths:           paths,
 			PortStart:       p.InstanceStatus.PortStart,
 			PortEnd:         p.InstanceStatus.PortEnd,
+			TcpPort:         p.InstanceStatus.TcpPort,
+			RdmaPort:        p.InstanceStatus.RdmaPort,
 			TargetPortStart: p.InstanceStatus.TargetPortStart,
 			TargetPortEnd:   p.InstanceStatus.TargetPortEnd,
 			UblkID:          p.InstanceStatus.UblkID,
@@ -514,6 +518,7 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 	binary := ""
 	args := []string{}
 	replicaAddresses := map[string]string{}
+	replicaTransportAddresses := map[string]*imrpc.ReplicaTransportAddresses{}
 
 	var err error
 
@@ -530,6 +535,12 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 		}
 	case longhorn.DataEngineTypeV2:
 		replicaAddresses = req.Engine.Status.CurrentReplicaAddressMap
+		for name, addrs := range req.Engine.Status.CurrentReplicaTransportAddressMap {
+			replicaTransportAddresses[name] = &imrpc.ReplicaTransportAddresses{
+				TcpAddress:  addrs.TcpAddress,
+				RdmaAddress: addrs.RdmaAddress,
+			}
+		}
 		// v2 target doesn't need frontend - it will be set by initiator (EngineFrontend)
 	}
 
@@ -556,15 +567,16 @@ func (c *InstanceManagerClient) EngineInstanceCreate(req *EngineInstanceCreateRe
 		BinaryArgs: args,
 
 		Engine: imclient.EngineCreateRequest{
-			ReplicaAddressMap: replicaAddresses,
-			Frontend:          frontend,
-			UblkQueueDepth:    req.UblkQueueDepth,
-			UblkNumberOfQueue: req.UblkNumberOfQueue,
-			UpgradeRequired:   req.UpgradeRequired,
-			InitiatorAddress:  req.InitiatorAddress,
-			TargetAddress:     req.TargetAddress,
-			SalvageRequested:  req.Engine.Spec.SalvageRequested,
-			SnapshotMaxCount:  req.Engine.Spec.SnapshotMaxCount,
+			ReplicaAddressMap:          replicaAddresses,
+			ReplicaTransportAddressMap: replicaTransportAddresses,
+			Frontend:                   frontend,
+			UblkQueueDepth:             req.UblkQueueDepth,
+			UblkNumberOfQueue:          req.UblkNumberOfQueue,
+			UpgradeRequired:            req.UpgradeRequired,
+			InitiatorAddress:           req.InitiatorAddress,
+			TargetAddress:              req.TargetAddress,
+			SalvageRequested:           req.Engine.Spec.SalvageRequested,
+			SnapshotMaxCount:           req.Engine.Spec.SnapshotMaxCount,
 		},
 	})
 

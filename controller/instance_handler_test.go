@@ -392,6 +392,40 @@ func (s *TestSuite) TestReconcileInstanceState(c *C) {
 			newEngine(ExistingInstance, "", TestInstanceManagerName, "", "", 0, false, longhorn.InstanceStateStopping, longhorn.InstanceStateStopped),
 			false,
 		},
+		// 7.1.1.b becoming stopping must clear the v2 transport ports along
+		// with IP/Port, otherwise a later transport-address map build can pick
+		// up stale per-replica ports.
+		"engine becomes stopping clears transport ports": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{
+					ExistingInstance: {
+						Spec: longhorn.InstanceProcessSpec{
+							Name: ExistingInstance,
+						},
+						Status: longhorn.InstanceProcessStatus{
+							State:     longhorn.InstanceStateStopping,
+							PortStart: TestPort1,
+						},
+					},
+				},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			func() *longhorn.Engine {
+				e := newEngine(ExistingInstance, TestEngineImage, TestInstanceManagerName, "", TestIP1, TestPort1, false, longhorn.InstanceStateRunning, longhorn.InstanceStateStopped)
+				e.Status.TcpPort = TestPort1
+				e.Status.RdmaPort = TestPort1 + 1
+				return e
+			}(),
+			newEngine(ExistingInstance, "", TestInstanceManagerName, "", "", 0, false, longhorn.InstanceStateStopping, longhorn.InstanceStateStopped),
+			false,
+		},
 		// 7.1.2. still stopping
 		"engine is still stopping": {
 			longhorn.InstanceTypeEngine,

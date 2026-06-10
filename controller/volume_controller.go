@@ -2531,6 +2531,7 @@ func (c *VolumeController) openVolumeDependentResources(v *longhorn.Volume, e *l
 		e.Spec.NodeID = targetEngineNodeID
 	}
 	e.Spec.ReplicaAddressMap = replicaAddressMap
+	e.Spec.ReplicaTransportAddressMap = buildReplicaTransportAddressMap(rs, replicaAddressMap)
 	e.Spec.DesireState = longhorn.InstanceStateRunning
 	// The volume may be activated
 	e.Spec.DisableFrontend = v.Status.FrontendDisabled
@@ -4189,6 +4190,9 @@ func (c *VolumeController) finishLiveEngineUpgrade(v *longhorn.Volume, e *longho
 	}, v.Spec.Image)
 
 	e.Spec.ReplicaAddressMap = e.Spec.UpgradedReplicaAddressMap
+	// Clear the transport map: it mirrors the pre-upgrade replicas' per-replica
+	// ports, and a v2 live upgrade must rebuild it for the new replicas.
+	e.Spec.ReplicaTransportAddressMap = nil
 	e.Spec.UpgradedReplicaAddressMap = map[string]string{}
 	// cleanupCorruptedOrStaleReplicas() will take care of old replicas
 	log.Infof("Engine %v has been upgraded from %v to %v", e.Name, v.Status.CurrentImage, v.Spec.Image)
@@ -5908,6 +5912,7 @@ func (c *VolumeController) prepareReplicasAndEngineForTargetNode(v *longhorn.Vol
 			log.Warn("The current available migration replicas do not match the record in the migration engine status, will restart the migration engine then update the replica map")
 			migrationEngine.Spec.NodeID = ""
 			migrationEngine.Spec.ReplicaAddressMap = map[string]string{}
+			migrationEngine.Spec.ReplicaTransportAddressMap = nil
 			migrationEngine.Spec.DesireState = longhorn.InstanceStateStopped
 			return false, false, nil
 		}
@@ -5919,6 +5924,7 @@ func (c *VolumeController) prepareReplicasAndEngineForTargetNode(v *longhorn.Vol
 
 	migrationEngine.Spec.NodeID = targetNodeID
 	migrationEngine.Spec.ReplicaAddressMap = replicaAddressMap
+	migrationEngine.Spec.ReplicaTransportAddressMap = buildReplicaTransportAddressMap(rs, replicaAddressMap)
 	migrationEngine.Spec.DesireState = longhorn.InstanceStateRunning
 
 	if migrationEngine.Status.CurrentState != longhorn.InstanceStateRunning {
@@ -6527,4 +6533,47 @@ func (c *VolumeController) syncVolumeOnDemandSnapshotStatus(v *longhorn.Volume, 
 	// All relevant snapshots have at least one checksum, and we have fresh results where possible. Acknowledge this request.
 	v.Status.LastOnDemandSnapshotHashingCompleteAt = v.Spec.SnapshotHashingRequestedAt
 	return nil
+}
+
+// buildReplicaTransportAddressMap builds the transport-qualified address map
+// that the engine uses to pick the matching transport per replica. Keyed the
+// same as replicaAddressMap (only includes replicas that are in it) so each
+// entry pairs a TcpAddress and, when the storage node exposes RDMA, an
+// RdmaAddress. Returns nil when nothing would be added so engine.Spec stays
+// minimal on v1 volumes and in rolling-upgrade windows where replica statuses
+// predate the new port fields.
+func buildReplicaTransportAddressMap(rs map[string]*longhorn.Replica, replicaAddressMap map[string]string) map[string]longhorn.ReplicaTransportAddresses {
+	if len(replicaAddressMap) == 0 {
+		return nil
+	}
+	out := map[string]longhorn.ReplicaTransportAddresses{}
+	for name := range replicaAddressMap {
+		r, ok := rs[name]
+		if !ok || r == nil {
+			continue
+		}
+		entry := longhorn.ReplicaTransportAddresses{}
+		if r.Status.TcpPort != 0 {
+			entry.TcpAddress = imutil.GetURL(r.Status.StorageIP, r.Status.TcpPort)
+		}
+		if r.Status.RdmaPort != 0 {
+			entry.RdmaAddress = imutil.GetURL(r.Status.StorageIP, r.Status.RdmaPort)
+		}
+		// Every advertised replica must be reachable over TCP: an RDMA-capable
+		// replica always exposes a TCP fallback listener alongside its RDMA
+		// primary. Skip an entry with no TCP address -- that covers a legacy
+		// replica (no ports reported by a transport-unaware IM) and a
+		// malformed RDMA-only exposure. Publishing an RDMA-only (half) entry
+		// would be useless to a TCP engine and worse than no entry: with no
+		// entry the engine falls back to the legacy address over TCP, which is
+		// the correct behaviour for a transport-unaware target.
+		if entry.TcpAddress == "" {
+			continue
+		}
+		out[name] = entry
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
