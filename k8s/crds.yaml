@@ -1279,6 +1279,11 @@ spec:
                       type: string
                     targetPort:
                       type: integer
+                    transport:
+                      description: |-
+                        Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                        over, as observed by the instance manager.
+                      type: string
                   type: object
                 type: array
               port:
@@ -2166,6 +2171,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:
@@ -2246,6 +2256,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:
@@ -2326,6 +2341,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:

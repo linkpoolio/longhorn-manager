@@ -341,6 +341,7 @@ func (s *TestSuite) TestSyncEngineFrontendPathStatus(c *C) {
 					TargetPort: 9502,
 					EngineName: "engine-a",
 					ANAState:   "non-optimized",
+					Transport:  "rdma",
 				},
 				{
 					TargetIP:   "10.0.0.2",
@@ -360,6 +361,7 @@ func (s *TestSuite) TestSyncEngineFrontendPathStatus(c *C) {
 	c.Assert(ef.Status.TargetPort, Equals, 9502)
 	c.Assert(len(ef.Status.Paths), Equals, 2)
 	c.Assert(ef.Status.Paths[1].ANAState, Equals, "optimized")
+	c.Assert(ef.Status.Paths[0].Transport, Equals, "rdma")
 
 	instance.Status.Paths[1].TargetIP = "mutated"
 	c.Assert(ef.Status.Paths[1].TargetIP, Equals, "10.0.0.2")

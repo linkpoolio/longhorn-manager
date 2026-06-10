@@ -289,6 +289,7 @@ func parseInstance(p *imapi.Instance) *longhorn.InstanceProcess {
 			NQN:        path.NQN,
 			NGUID:      path.NGUID,
 			ANAState:   path.ANAState,
+			Transport:  path.Transport,
 		})
 	}
 
