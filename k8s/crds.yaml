@@ -1561,6 +1561,29 @@ spec:
                 type: boolean
               nodeID:
                 type: string
+              qosLimits:
+                description: |-
+                  QosLimits caps aggregate raid bdev I/O for v2 engines via SPDK's
+                  bdev_set_qos_limit. Propagated by the volume controller from
+                  VolumeSpec.QosLimits. nil / all-zero means unlimited.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               rebuildConcurrentSyncLimit:
                 description: |-
                   RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run
@@ -1694,6 +1717,29 @@ spec:
                 type: string
               isExpanding:
                 type: boolean
+              lastAppliedQosLimits:
+                description: |-
+                  LastAppliedQosLimits records the QosLimits last pushed to the v2 engine
+                  instance via SPDK bdev_set_qos_limit. Compared against Spec.QosLimits in
+                  the engine controller to drive live updates without recreating the engine.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               lastExpansionError:
                 type: string
               lastExpansionFailedAt:
@@ -4026,6 +4072,32 @@ spec:
                 - disabled
                 - enabled
                 type: string
+              qosLimits:
+                description: |-
+                  QosLimits caps aggregate raid bdev I/O for v2 volumes via SPDK's
+                  bdev_set_qos_limit on the engine's raid bdev. Mapped 1:1 to SPDK
+                  parameters. All-zero (or nil) means unlimited (the default). Rebuild
+                  traffic — which goes engine→replica directly via NVMe-oF rather than
+                  through the raid bdev — is not subject to this cap.
+                  Currently v2 only; v1 ignores QosLimits.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               rebuildConcurrentSyncLimit:
                 description: |-
                   RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run

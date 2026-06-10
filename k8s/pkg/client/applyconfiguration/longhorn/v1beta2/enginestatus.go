@@ -53,6 +53,10 @@ type EngineStatusApplyConfiguration struct {
 	// concurrently during a single replica rebuild.
 	// It is determined by the global setting or the volume spec field with the same name.
 	RebuildConcurrentSyncLimit *int `json:"rebuildConcurrentSyncLimit,omitempty"`
+	// LastAppliedQosLimits records the QosLimits last pushed to the v2 engine
+	// instance via SPDK bdev_set_qos_limit. Compared against Spec.QosLimits in
+	// the engine controller to drive live updates without recreating the engine.
+	LastAppliedQosLimits *QosLimitsApplyConfiguration `json:"lastAppliedQosLimits,omitempty"`
 }
 
 // EngineStatusApplyConfiguration constructs a declarative configuration of the EngineStatus type for use with
@@ -272,5 +276,13 @@ func (b *EngineStatusApplyConfiguration) WithSnapshotMaxSize(value int64) *Engin
 // If called multiple times, the RebuildConcurrentSyncLimit field is set to the value of the last call.
 func (b *EngineStatusApplyConfiguration) WithRebuildConcurrentSyncLimit(value int) *EngineStatusApplyConfiguration {
 	b.RebuildConcurrentSyncLimit = &value
+	return b
+}
+
+// WithLastAppliedQosLimits sets the LastAppliedQosLimits field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the LastAppliedQosLimits field is set to the value of the last call.
+func (b *EngineStatusApplyConfiguration) WithLastAppliedQosLimits(value *QosLimitsApplyConfiguration) *EngineStatusApplyConfiguration {
+	b.LastAppliedQosLimits = value
 	return b
 }

@@ -156,6 +156,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &longhornv1beta2.OrphanStatusApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("PurgeStatus"):
 		return &longhornv1beta2.PurgeStatusApplyConfiguration{}
+	case v1beta2.SchemeGroupVersion.WithKind("QosLimits"):
+		return &longhornv1beta2.QosLimitsApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("RebuildStatus"):
 		return &longhornv1beta2.RebuildStatusApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("RecurringJob"):
