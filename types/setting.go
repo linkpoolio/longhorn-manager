@@ -2377,6 +2377,13 @@ func SetSettingDefinition(name SettingName, definition SettingDefinition) {
 }
 
 func GetDangerZoneSettings() sets.Set[SettingName] {
+	// settingDefinitions is mutated by SetSettingDefinition under the write
+	// lock; iterating without the read lock can produce a "concurrent map
+	// iteration and map write" fatal panic when a controller goroutine
+	// hits this function while a setting definition update is in flight.
+	settingDefinitionsLock.RLock()
+	defer settingDefinitionsLock.RUnlock()
+
 	settingList := sets.New[SettingName]()
 	for settingName, setting := range settingDefinitions {
 		if setting.Category == SettingCategoryDangerZone {
