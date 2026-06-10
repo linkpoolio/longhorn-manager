@@ -31,18 +31,25 @@ type EngineSpecApplyConfiguration struct {
 	// ublkQueueDepth controls the depth of each queue for ublk frontend.
 	UblkQueueDepth *int `json:"ublkQueueDepth,omitempty"`
 	// ublkNumberOfQueue controls the number of queues for ublk frontend.
-	UblkNumberOfQueue                *int                              `json:"ublkNumberOfQueue,omitempty"`
-	ReplicaAddressMap                map[string]string                 `json:"replicaAddressMap,omitempty"`
-	UpgradedReplicaAddressMap        map[string]string                 `json:"upgradedReplicaAddressMap,omitempty"`
-	BackupVolume                     *string                           `json:"backupVolume,omitempty"`
-	RequestedBackupRestore           *string                           `json:"requestedBackupRestore,omitempty"`
-	RequestedDataSource              *longhornv1beta2.VolumeDataSource `json:"requestedDataSource,omitempty"`
-	DisableFrontend                  *bool                             `json:"disableFrontend,omitempty"`
-	RevisionCounterDisabled          *bool                             `json:"revisionCounterDisabled,omitempty"`
-	UnmapMarkSnapChainRemovedEnabled *bool                             `json:"unmapMarkSnapChainRemovedEnabled,omitempty"`
-	Active                           *bool                             `json:"active,omitempty"`
-	SnapshotMaxCount                 *int                              `json:"snapshotMaxCount,omitempty"`
-	SnapshotMaxSize                  *int64                            `json:"snapshotMaxSize,omitempty"`
+	UblkNumberOfQueue *int              `json:"ublkNumberOfQueue,omitempty"`
+	ReplicaAddressMap map[string]string `json:"replicaAddressMap,omitempty"`
+	// ReplicaTransportAddressMap carries transport-qualified addresses per
+	// replica so the engine picks the transport matching its own node
+	// transport (RDMA when supported, TCP otherwise) at attach time. Keyed by
+	// replica name with both tcp_address and (optionally) rdma_address per
+	// entry. Optional; when empty the engine falls back to the legacy
+	// replica_address_map with its own replicaTransport.
+	ReplicaTransportAddressMap       map[string]ReplicaTransportAddressesApplyConfiguration `json:"replicaTransportAddressMap,omitempty"`
+	UpgradedReplicaAddressMap        map[string]string                                      `json:"upgradedReplicaAddressMap,omitempty"`
+	BackupVolume                     *string                                                `json:"backupVolume,omitempty"`
+	RequestedBackupRestore           *string                                                `json:"requestedBackupRestore,omitempty"`
+	RequestedDataSource              *longhornv1beta2.VolumeDataSource                      `json:"requestedDataSource,omitempty"`
+	DisableFrontend                  *bool                                                  `json:"disableFrontend,omitempty"`
+	RevisionCounterDisabled          *bool                                                  `json:"revisionCounterDisabled,omitempty"`
+	UnmapMarkSnapChainRemovedEnabled *bool                                                  `json:"unmapMarkSnapChainRemovedEnabled,omitempty"`
+	Active                           *bool                                                  `json:"active,omitempty"`
+	SnapshotMaxCount                 *int                                                   `json:"snapshotMaxCount,omitempty"`
+	SnapshotMaxSize                  *int64                                                 `json:"snapshotMaxSize,omitempty"`
 	// RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run
 	// concurrently during a single replica rebuild.
 	// It is determined by the global setting or the volume spec field with the same name.
@@ -89,6 +96,20 @@ func (b *EngineSpecApplyConfiguration) WithReplicaAddressMap(entries map[string]
 	}
 	for k, v := range entries {
 		b.ReplicaAddressMap[k] = v
+	}
+	return b
+}
+
+// WithReplicaTransportAddressMap puts the entries into the ReplicaTransportAddressMap field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, the entries provided by each call will be put on the ReplicaTransportAddressMap field,
+// overwriting an existing map entries in ReplicaTransportAddressMap field with the same key.
+func (b *EngineSpecApplyConfiguration) WithReplicaTransportAddressMap(entries map[string]ReplicaTransportAddressesApplyConfiguration) *EngineSpecApplyConfiguration {
+	if b.ReplicaTransportAddressMap == nil && len(entries) > 0 {
+		b.ReplicaTransportAddressMap = make(map[string]ReplicaTransportAddressesApplyConfiguration, len(entries))
+	}
+	for k, v := range entries {
+		b.ReplicaTransportAddressMap[k] = v
 	}
 	return b
 }
