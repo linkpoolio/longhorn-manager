@@ -1236,6 +1236,24 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 		}
 	}
 
+	if engine.Spec.DataEngine == longhorn.DataEngineTypeV2 && !reflect.DeepEqual(engine.Spec.QosLimits, engine.Status.LastAppliedQosLimits) {
+		imClient, err := engineapi.NewInstanceManagerClient(im, false)
+		if err != nil {
+			return errors.Wrap(err, "failed to create instance manager client for v2 QoS update")
+		}
+		defer imClient.Close()
+		if err := imClient.EngineInstanceSetQosLimit(engine, engine.Spec.QosLimits); err != nil {
+			return errors.Wrap(err, "failed to apply v2 QoS limits")
+		}
+		if engine.Spec.QosLimits == nil {
+			engine.Status.LastAppliedQosLimits = nil
+		} else {
+			qosCopy := *engine.Spec.QosLimits
+			engine.Status.LastAppliedQosLimits = &qosCopy
+		}
+		m.logger.Infof("Applied v2 QoS limits %+v", engine.Spec.QosLimits)
+	}
+
 	// TODO: Check if the purge failure is handled somewhere else
 	dataEngineObj, err := m.ds.GetDataEngineObject(engine)
 	if err != nil {
