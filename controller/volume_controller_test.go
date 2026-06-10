@@ -1557,6 +1557,9 @@ func (s *TestSuite) TestPrepareReplicasAndEngineForMigrationV2UsesTargetNodeID(c
 	replica.Status.IP = randomIP()
 	replica.Status.StorageIP = replica.Status.IP
 	replica.Status.Port = randomPort()
+	// v2 replicas report a transport (TCP) port; the engine controller builds
+	// the transport-address map from it.
+	replica.Status.TcpPort = replica.Status.Port
 
 	currentEngine.Status.ReplicaModeMap = map[string]longhorn.ReplicaMode{replica.Name: longhorn.ReplicaModeRW}
 
@@ -1613,6 +1616,9 @@ func (s *TestSuite) TestPrepareReplicasAndEngineForMigrationV2SupportsSplitFront
 	replica.Status.IP = randomIP()
 	replica.Status.StorageIP = replica.Status.IP
 	replica.Status.Port = randomPort()
+	// v2 replicas report a transport (TCP) port; the engine controller builds
+	// the transport-address map from it.
+	replica.Status.TcpPort = replica.Status.Port
 
 	currentEngine.Status.ReplicaModeMap = map[string]longhorn.ReplicaMode{replica.Name: longhorn.ReplicaModeRW}
 
@@ -1942,6 +1948,7 @@ func setupSwitchoverTestInfra(c *C) (
 	replica.Status.IP = "10.0.0.10"
 	replica.Status.StorageIP = replica.Status.IP
 	replica.Status.Port = randomPort()
+	replica.Status.TcpPort = replica.Status.Port
 	replica.Spec.MigrationEngineName = migrationEngine.Name
 
 	currentEngine.Status.ReplicaModeMap = map[string]longhorn.ReplicaMode{
@@ -2448,6 +2455,7 @@ func (s *TestSuite) TestProcessMigrationV2CreatesMigrationEngineFrontend(c *C) {
 	currentReplica.Status.IP = randomIP()
 	currentReplica.Status.StorageIP = currentReplica.Status.IP
 	currentReplica.Status.Port = randomPort()
+	currentReplica.Status.TcpPort = currentReplica.Status.Port
 	currentEngine.Status.ReplicaModeMap = map[string]longhorn.ReplicaMode{
 		currentReplica.Name: longhorn.ReplicaModeRW,
 	}
@@ -2469,6 +2477,7 @@ func (s *TestSuite) TestProcessMigrationV2CreatesMigrationEngineFrontend(c *C) {
 	migrationReplica.Status.IP = randomIP()
 	migrationReplica.Status.StorageIP = migrationReplica.Status.IP
 	migrationReplica.Status.Port = randomPort()
+	migrationReplica.Status.TcpPort = migrationReplica.Status.Port
 	migrationEngine.Spec.ReplicaAddressMap = map[string]string{
 		migrationReplica.Name: imutil.GetURL(migrationReplica.Status.StorageIP, migrationReplica.Status.Port),
 	}
