@@ -1644,6 +1644,68 @@ func (s *TestSuite) TestPrepareReplicasAndEngineForMigrationV2SupportsSplitFront
 	c.Assert(replica.Spec.MigrationEngineName, Equals, migrationEngine.Name)
 }
 
+// A v2 EngineFrontend in Error while the engine and replicas stay running
+// (frontend block device torn down by an IM restart) must fault the volume AND
+// request a remount, since the AD state machine would otherwise leave the
+// volume Attached forever and never kick the workload pod. The remount must be
+// requested only on the transition into Faulted, not re-requested every
+// reconcile while the EF is still recovering (which would keep deleting the
+// replacement pod).
+func (s *TestSuite) TestFaultVolumeOnEngineFrontendError(c *C) {
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+	vc, err := newTestVolumeController(lhClient, kubeClient, extensionsClient, informerFactories, TestOwnerID1)
+	c.Assert(err, IsNil)
+
+	newAttachedV2Volume := func() (*longhorn.Volume, *longhorn.Engine, map[string]*longhorn.Replica, map[string]*longhorn.EngineFrontend) {
+		v := newVolume(TestVolumeName, 1)
+		v.Spec.DataEngine = longhorn.DataEngineTypeV2
+		v.Spec.NodeID = TestNode1
+		v.Status.CurrentNodeID = TestNode1
+		v.Status.State = longhorn.VolumeStateAttached
+		v.Status.Robustness = longhorn.VolumeRobustnessHealthy
+		v.Status.CurrentImage = TestEngineImage
+
+		e := newEngineForVolume(v)
+		e.Spec.DataEngine = longhorn.DataEngineTypeV2
+		e.Status.CurrentState = longhorn.InstanceStateRunning
+
+		r := newReplicaForVolume(v, e, TestNode1, TestDiskID1)
+		r.Status.CurrentState = longhorn.InstanceStateRunning
+
+		ef := newEngineFrontendForVolume(v, e.Name, TestNode1, "")
+		ef.Status.CurrentState = longhorn.InstanceStateError
+
+		return v, e, map[string]*longhorn.Replica{r.Name: r}, map[string]*longhorn.EngineFrontend{ef.Name: ef}
+	}
+
+	// Transition into Faulted: volume is faulted and a remount is requested.
+	v, e, rs, efs := newAttachedV2Volume()
+	log := getLoggerForVolume(vc.logger, v)
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessFaulted)
+	c.Assert(v.Status.RemountRequestedAt, Equals, getTestNow())
+
+	// Already Faulted (subsequent reconcile while EF still in Error): the
+	// volume stays faulted but the remount is NOT re-requested.
+	v.Status.RemountRequestedAt = ""
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessFaulted)
+	c.Assert(v.Status.RemountRequestedAt, Equals, "")
+
+	// Healthy EF: nothing happens.
+	v, e, rs, efs = newAttachedV2Volume()
+	for _, ef := range efs {
+		ef.Status.CurrentState = longhorn.InstanceStateRunning
+	}
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessHealthy)
+	c.Assert(v.Status.RemountRequestedAt, Equals, "")
+}
+
 func (s *TestSuite) TestAreVolumeDependentResourcesOpenedV2RequiresEngineFrontendEndpoint(c *C) {
 	vc := &VolumeController{}
 
