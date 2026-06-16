@@ -1996,17 +1996,27 @@ func getLivenessProbeCommand(dataEngine longhorn.DataEngineType) string {
 
 		// For v2, also verify:
 		// 1. spdk_tgt process exists.
-		// 2. spdk_tgt is not stuck in a stopped/traced state (for example, after SIGSTOP).
+		// 2. spdk_tgt is not in a state that means it is dead or not running:
+		//    T/t = stopped/traced (e.g. after SIGSTOP), Z = zombie/defunct
+		//    (crashed but not yet reaped by the parent), X/x = dead. A defunct
+		//    spdk_tgt still has a /proc entry so `pgrep` finds it and the old
+		//    check (only T/t) passed it - letting a crashed spdk_tgt sit behind
+		//    a "healthy" pod forever. Treat a missing State (process vanished
+		//    mid-read) as failure too.
 		processProbe := `
-pids=$(pgrep -f '^spdk_tgt') &&
-[ -n "$pids" ] &&
-status=0 &&
-for pid in $pids; do
-  state=$(awk '/^State:/ {print $2}' /proc/$pid/status 2>/dev/null)
-  [ -n "$state" ] || status=1
-  [ "$state" != "T" ] && [ "$state" != "t" ] || status=1
-done
-test $status -eq 0
+status=1
+pids=$(pgrep -f '^spdk_tgt') || pids=
+if [ -n "$pids" ]; then
+  status=0
+  for pid in $pids; do
+    state=$(awk '/^State:/ {print $2}' /proc/$pid/status 2>/dev/null)
+    [ -n "$state" ] || status=1
+    case "$state" in
+      T|t|Z|X|x) status=1 ;;
+    esac
+  done
+fi
+test "$status" -eq 0
 `
 		livenessProbes = append(livenessProbes, processProbe)
 	}
