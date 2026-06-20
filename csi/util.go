@@ -2,6 +2,7 @@ package csi
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -657,4 +658,48 @@ func isNotMountedError(err error) bool {
 	}
 	return strings.Contains(err.Error(), "not mounted") ||
 		strings.Contains(err.Error(), "no mount point specified")
+}
+
+// getBlockDeviceSize returns the size of a block device in bytes via the
+// BLKGETSIZE64 ioctl.
+func getBlockDeviceSize(devicePath string) (int64, error) {
+	f, err := os.Open(devicePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	size, err := unix.IoctlGetInt(int(f.Fd()), unix.BLKGETSIZE64)
+	if err != nil {
+		return 0, errors.Wrapf(err, "failed BLKGETSIZE64 on %v", devicePath)
+	}
+	return int64(size), nil
+}
+
+// getXFSDataSize reads the XFS superblock directly from the device and returns the
+// size of the filesystem's data section in bytes (sb_blocksize * sb_dblocks). It
+// reads the raw device so it does not depend on the filesystem being mounted or on
+// xfs userspace tooling (xfs_growfs/xfs_io), which can fail to recognize a mounted
+// XFS in some node environments and would otherwise mislead a resize decision.
+func getXFSDataSize(devicePath string) (int64, error) {
+	f, err := os.Open(devicePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	// XFS on-disk superblock (xfs_dsb), big-endian:
+	//   sb_magicnum uint32 @ offset 0 ("XFSB")
+	//   sb_blocksize uint32 @ offset 4
+	//   sb_dblocks   uint64 @ offset 8
+	buf := make([]byte, 16)
+	if _, err := f.ReadAt(buf, 0); err != nil {
+		return 0, errors.Wrapf(err, "failed to read XFS superblock from %v", devicePath)
+	}
+	if string(buf[0:4]) != "XFSB" {
+		return 0, fmt.Errorf("device %v does not contain an XFS superblock", devicePath)
+	}
+	blockSize := int64(binary.BigEndian.Uint32(buf[4:8]))
+	dataBlocks := int64(binary.BigEndian.Uint64(buf[8:16]))
+	return blockSize * dataBlocks, nil
 }
