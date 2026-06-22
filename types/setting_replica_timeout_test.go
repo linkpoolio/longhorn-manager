@@ -18,7 +18,7 @@ var replicaTimeoutSettings = []struct {
 	max         int
 	settingType SettingType
 }{
-	{SettingNameDataEngineReplicaCtrlrLossTimeoutSec, EnvV2ReplicaCtrlrLossTimeoutSec, "15", 0, false, 0, SettingTypeInt},
+	{SettingNameDataEngineReplicaCtrlrLossTimeoutSec, EnvV2ReplicaCtrlrLossTimeoutSec, "15", -1, false, 0, SettingTypeInt},
 	{SettingNameDataEngineReplicaFastIOFailTimeoutSec, EnvV2ReplicaFastIOFailTimeoutSec, "10", 0, false, 0, SettingTypeInt},
 	{SettingNameDataEngineReplicaReconnectDelaySec, EnvV2ReplicaReconnectDelaySec, "2", 0, false, 0, SettingTypeInt},
 	{SettingNameDataEngineReplicaTransportAckTimeout, EnvV2ReplicaTransportAckTimeout, "10", 0, true, 31, SettingTypeInt},

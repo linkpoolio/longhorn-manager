@@ -1844,15 +1844,19 @@ var (
 
 	SettingDefinitionDataEngineReplicaCtrlrLossTimeoutSec = SettingDefinition{
 		DisplayName:        "Replica Controller Loss Timeout",
-		Description:        "Applies only to the V2 Data Engine. Seconds a V2 engine waits for a disconnected replica bdev_nvme controller to reconnect before giving up and removing the controller. Longer values increase recovery tolerance at the cost of slower failure detection.",
+		Description:        "Applies only to the V2 Data Engine. Seconds a V2 engine waits for a disconnected replica bdev_nvme controller to reconnect before giving up and removing the controller. Longer values increase recovery tolerance at the cost of slower failure detection. -1 means never auto-remove: bdev_nvme reconnects forever and leaves controller teardown entirely to the engine (used to avoid the bdev_nvme-destruct vs raid base-bdev removal deadlock).",
 		Category:           SettingCategoryDangerZone,
 		Type:               SettingTypeInt,
 		Required:           true,
 		ReadOnly:           false,
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"15\"}", longhorn.DataEngineTypeV2),
+		// Minimum -1: -1 is the canonical bdev_nvme "infinite / never
+		// auto-destruct" value (see ctrlr_loss_timeout_sec in bdev_nvme);
+		// every other negative is invalid. Non-negative values are finite
+		// timeouts as before.
 		ValueIntRange: map[string]int{
-			ValueIntRangeMinimum: 0,
+			ValueIntRangeMinimum: -1,
 		},
 	}
 
