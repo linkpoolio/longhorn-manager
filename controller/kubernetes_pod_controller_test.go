@@ -339,19 +339,27 @@ func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *
 	}()
 
 	testCases := map[string]struct {
-		efState          longhorn.InstanceState
-		expectGraceZero  bool
-		description      string
+		efState         longhorn.InstanceState
+		efExists        bool
+		expectGraceZero bool
+		description     string
 	}{
 		"EF in Error -> force-delete (grace 0)": {
 			efState:         longhorn.InstanceStateError,
+			efExists:        true,
 			expectGraceZero: true,
 			description:     "Dead dm-linear device; graceful flush would wedge in D-state",
 		},
 		"EF Running -> graceful (grace 30)": {
 			efState:         longhorn.InstanceStateRunning,
+			efExists:        true,
 			expectGraceZero: false,
 			description:     "Live device; let the workload flush before recreate",
+		},
+		"EF missing -> graceful (grace 30), fail-safe default": {
+			efExists:        false,
+			expectGraceZero: false,
+			description:     "EF not found / lookup error -> device state unknown -> fall back to graceful (do not force-delete on ambiguous state)",
 		},
 	}
 
@@ -424,7 +432,9 @@ func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *
 		autoDeleteSetting := newSetting(string(types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly), "true")
 		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer().Add(autoDeleteSetting), IsNil)
 		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Volumes().Informer().GetIndexer().Add(vol), IsNil)
-		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().EngineFrontends().Informer().GetIndexer().Add(ef), IsNil)
+		if tc.efExists {
+			c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().EngineFrontends().Informer().GetIndexer().Add(ef), IsNil)
+		}
 		c.Assert(informerFactories.KubeInformerFactory.Core().V1().PersistentVolumeClaims().Informer().GetIndexer().Add(pvc), IsNil)
 		c.Assert(informerFactories.KubeInformerFactory.Core().V1().PersistentVolumes().Informer().GetIndexer().Add(pv), IsNil)
 		c.Assert(informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer().Add(pod), IsNil)
@@ -433,8 +443,10 @@ func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *
 		c.Assert(err, IsNil)
 		_, err = lhClient.LonghornV1beta2().Volumes(TestNamespace).Create(context.TODO(), vol, metav1.CreateOptions{})
 		c.Assert(err, IsNil)
-		_, err = lhClient.LonghornV1beta2().EngineFrontends(TestNamespace).Create(context.TODO(), ef, metav1.CreateOptions{})
-		c.Assert(err, IsNil)
+		if tc.efExists {
+			_, err = lhClient.LonghornV1beta2().EngineFrontends(TestNamespace).Create(context.TODO(), ef, metav1.CreateOptions{})
+			c.Assert(err, IsNil)
+		}
 		_, err = kubeClient.CoreV1().PersistentVolumeClaims(TestNamespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
 		c.Assert(err, IsNil)
 		_, err = kubeClient.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
