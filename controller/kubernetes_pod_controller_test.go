@@ -14,6 +14,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/controller"
 
@@ -322,4 +323,140 @@ func (s *TestSuite) TestHandlePodDeletionForRWXVolumeRemountScenarios(c *C) {
 
 func ptrTo[T any](v T) *T {
 	return &v
+}
+
+// TestHandlePodDeletionForceDeletesOnV2EngineFrontendError verifies the v2
+// EngineFrontend-death remount path force-deletes the workload pod (grace 0)
+// instead of the default graceful 30s. A graceful termination against a dead
+// dm-linear device parks in uninterruptible D-state (the workload tries to
+// flush to a device that can never complete the I/O), so when the EF is
+// confirmed in Error at delete time the pod must be SIGKILLed immediately.
+// The negative case (EF Running) keeps the graceful 30s.
+func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *C) {
+	datastore.SkipListerCheck = true
+	defer func() {
+		datastore.SkipListerCheck = false
+	}()
+
+	testCases := map[string]struct {
+		efState          longhorn.InstanceState
+		expectGraceZero  bool
+		description      string
+	}{
+		"EF in Error -> force-delete (grace 0)": {
+			efState:         longhorn.InstanceStateError,
+			expectGraceZero: true,
+			description:     "Dead dm-linear device; graceful flush would wedge in D-state",
+		},
+		"EF Running -> graceful (grace 30)": {
+			efState:         longhorn.InstanceStateRunning,
+			expectGraceZero: false,
+			description:     "Live device; let the workload flush before recreate",
+		},
+	}
+
+	for name, tc := range testCases {
+		c.Logf("Running test case: %s", name)
+
+		kubeClient := fake.NewSimpleClientset()
+		lhClient := lhfake.NewSimpleClientset() //nolint:staticcheck
+		extensionsClient := apiextensionsfake.NewSimpleClientset()
+		informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+		kc, err := newTestKubernetesPodController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+		c.Assert(err, IsNil)
+
+		referenceTime := time.Now().UTC()
+		baseTime := referenceTime.Add(-2 * time.Minute)
+		remountRequestedAtTime := baseTime.Add(30 * time.Second)
+		remountRequestedAt := remountRequestedAtTime.UTC().Format(time.RFC3339)
+		podStartTime := metav1.NewTime(baseTime)
+
+		vol := newVolume(TestVolumeName, 1)
+		vol.Namespace = TestNamespace
+		vol.Spec.DataEngine = longhorn.DataEngineTypeV2
+		vol.Status.State = longhorn.VolumeStateAttached
+		vol.Status.Robustness = longhorn.VolumeRobustnessFaulted
+		vol.Status.CurrentNodeID = TestNode1
+		vol.Status.RemountRequestedAt = remountRequestedAt
+
+		ef := newEngineFrontendForVolume(vol, TestEngineName, TestNode1, "")
+		ef.Status.CurrentState = tc.efState
+
+		pv := &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: TestPVName},
+			Spec: corev1.PersistentVolumeSpec{
+				PersistentVolumeSource: corev1.PersistentVolumeSource{
+					CSI: &corev1.CSIPersistentVolumeSource{
+						Driver:       types.LonghornDriverName,
+						VolumeHandle: vol.Name,
+					},
+				},
+			},
+		}
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: TestPVCName, Namespace: TestNamespace},
+			Spec: corev1.PersistentVolumeClaimSpec{VolumeName: pv.Name},
+		}
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      TestPod1,
+				Namespace: TestNamespace,
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: appsv1.SchemeGroupVersion.String(),
+					Kind:       types.KubernetesKindDeployment,
+					Name:       TestDeploymentName,
+					Controller: ptrTo(true),
+				}},
+			},
+			Spec: corev1.PodSpec{
+				NodeName: TestNode1,
+				Volumes: []corev1.Volume{{
+					Name: "data",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc.Name},
+					},
+				}},
+			},
+			Status: corev1.PodStatus{StartTime: &podStartTime},
+		}
+
+		autoDeleteSetting := newSetting(string(types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly), "true")
+		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer().Add(autoDeleteSetting), IsNil)
+		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Volumes().Informer().GetIndexer().Add(vol), IsNil)
+		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().EngineFrontends().Informer().GetIndexer().Add(ef), IsNil)
+		c.Assert(informerFactories.KubeInformerFactory.Core().V1().PersistentVolumeClaims().Informer().GetIndexer().Add(pvc), IsNil)
+		c.Assert(informerFactories.KubeInformerFactory.Core().V1().PersistentVolumes().Informer().GetIndexer().Add(pv), IsNil)
+		c.Assert(informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer().Add(pod), IsNil)
+
+		_, err = lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), autoDeleteSetting, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		_, err = lhClient.LonghornV1beta2().Volumes(TestNamespace).Create(context.TODO(), vol, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		_, err = lhClient.LonghornV1beta2().EngineFrontends(TestNamespace).Create(context.TODO(), ef, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		_, err = kubeClient.CoreV1().PersistentVolumeClaims(TestNamespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		_, err = kubeClient.CoreV1().PersistentVolumes().Create(context.TODO(), pv, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+
+		kubeClient.ClearActions()
+		c.Assert(kc.handlePodDeletionIfVolumeRequestRemount(pod), IsNil)
+
+		actions := kubeClient.Actions()
+		c.Assert(actions, HasLen, 1, Commentf("Test case: %s - %s", name, tc.description))
+		c.Assert(actions[0].GetVerb(), Equals, "delete", Commentf("Test case: %s", name))
+		c.Assert(actions[0].GetResource().Resource, Equals, "pods", Commentf("Test case: %s", name))
+
+		deleteAction := actions[0].(ktesting.DeleteAction)
+		opts := deleteAction.GetDeleteOptions()
+		c.Assert(opts.GracePeriodSeconds, NotNil, Commentf("Test case: %s", name))
+		if tc.expectGraceZero {
+			c.Assert(*opts.GracePeriodSeconds, Equals, int64(0), Commentf("Test case: %s - %s", name, tc.description))
+		} else {
+			c.Assert(*opts.GracePeriodSeconds, Equals, int64(30), Commentf("Test case: %s - %s", name, tc.description))
+		}
+	}
 }
