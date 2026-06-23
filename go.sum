@@ -166,6 +166,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de h1:9TO3cAIGXtEhnIaL+V+BEER86oLrvS+kWobKpbJuye0=
 github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de/go.mod h1:zAbeS9B/r2mtpb6U+EI2rYA5OAXxsYw6wTamcNW+zcE=
+github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080 h1:LOwjt60Vx1xzFDL/8hUicbzjexJLUpEMPWAdVcsTe+E=
+github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080/go.mod h1:+aXFI8DmHTX4Az9pZF16/XKfrVKWIESJjw+hcxdMslw=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260609184748-8002e3abaf32 h1:w1BhsCe0AdMcPSgA0350v0kbGnqyCsavRYHY5Q8s5E4=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260609184748-8002e3abaf32/go.mod h1:ZxbMkGsbC2TpzuGLjn9yXXExolt8/F3dl/C8O9/Qa7s=
 github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338 h1:ncnhzF0QTDIprxwcSLmmlWA32Vtmf2OuzmQcJpyASyc=
@@ -180,8 +182,6 @@ github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68 h1:p05ShG/5Gr
 github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68/go.mod h1:sJ3YQBK1exSY+Gep0cKaQhZ9f2rOem2hy6NTOk7iFg8=
 github.com/longhorn/beszel v0.16.2-0.20260114090315-332709c32c7d h1:Fu1U1CyaxN42AItajvTu4iKdyjOJitKIu0NtQc1jye8=
 github.com/longhorn/beszel v0.16.2-0.20260114090315-332709c32c7d/go.mod h1:369q8Fv+iqznDYF3++boASEe1+fKS8Q4vdSb8isEI1c=
-github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2 h1:2xTjL2HGPW1/pV7DG7a/0IRbnksf5e0SLlrLrNE24ig=
-github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2/go.mod h1:6dyqqzjGfiPBn0OTKZcTBOjyViexE/L2D56741sch5s=
 github.com/longhorn/go-iscsi-helper v0.0.0-20260331100542-4c4c6f91525b h1:877AlP/bMchRs0qRHVW3zZ42qt+iNjALc4Sz9XzrgZQ=
 github.com/longhorn/go-iscsi-helper v0.0.0-20260331100542-4c4c6f91525b/go.mod h1:5obSKdWNPiFbFTzPWU09k9mGCSnpN9pgGoHQTUk7kYo=
 github.com/longhorn/longhorn-engine v1.12.0-dev-20260503.0.20260514055128-ec3f7dbb512f h1:R76xekZfQKZTJrWs74QD4YLhXTiGEEUJr5aEjKGoh3k=

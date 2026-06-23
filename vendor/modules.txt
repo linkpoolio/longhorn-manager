@@ -283,7 +283,7 @@ github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/systembackup
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2
+# github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2 => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
 ## explicit; go 1.25.0
 github.com/longhorn/go-common-libs/backingimage
 github.com/longhorn/go-common-libs/backup
@@ -1406,3 +1406,4 @@ sigs.k8s.io/yaml/kyaml
 # github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260610091928-a08cb4ff0b7a
 # github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260610092230-6ea821a31715
 # github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338
+# github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
