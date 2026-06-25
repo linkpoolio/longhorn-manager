@@ -1922,32 +1922,8 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 			}
 		}
 
-		// For v2 data engine, the EngineFrontend (NVMe-TCP initiator + block device)
-		// is a separate instance from the Engine (SPDK RAID target). The EF can enter
-		// Error independently when the block device disappears (e.g., during a replica
-		// instance manager restart), even while the engine and replicas remain running.
-		// The control plane treats this the same as a v1 engine error: mark the volume
-		// as faulted so the detach/reattach/remount cycle restores access.
-		if types.IsDataEngineV2(v.Spec.DataEngine) {
-			ef, err := pickCurrentEngineFrontend(v, efs)
-			if err == nil && ef != nil && ef.Status.CurrentState == longhorn.InstanceStateError {
-				if v.Status.CurrentNodeID != "" || (v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached) {
-					log.Warn("EngineFrontend of volume dead unexpectedly, setting v.Status.Robustness to faulted")
-					msg := fmt.Sprintf("EngineFrontend of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
-					c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
-					e.Spec.LogRequested = true
-					for _, r := range rs {
-						if r.Status.CurrentState == longhorn.InstanceStateRunning {
-							r.Spec.LogRequested = true
-							rs[r.Name] = r
-						}
-					}
-					v.Status.Robustness = longhorn.VolumeRobustnessFaulted
-					if err := c.handleDelinquentAndStaleStateForFaultedRWXVolume(v); err != nil {
-						return err
-					}
-				}
-			}
+		if err := c.faultVolumeOnEngineFrontendError(v, e, rs, efs, log); err != nil {
+			return err
 		}
 	}
 
@@ -2005,6 +1981,62 @@ func (c *VolumeController) handleDelinquentAndStaleStateForFaultedRWXVolume(v *l
 		return nil
 	}
 	return c.ds.ClearDelinquentAndStaleStateIfVolumeIsDelinquent(v.Name, "")
+}
+
+// faultVolumeOnEngineFrontendError handles the v2-only case where the
+// EngineFrontend (NVMe-TCP initiator + block device) enters Error independently
+// of the Engine (SPDK RAID target) — e.g. the dm-linear block device is torn
+// down by an instance-manager restart while the engine and replicas keep
+// running. The control plane treats this like a v1 engine death: mark the
+// volume faulted so the detach/reattach/remount cycle restores access.
+//
+// Unlike a dead v1 engine, the engine and replicas here are still running, so
+// the AD state machine keeps the volume Attached (Spec.NodeID == CurrentNodeID
+// is a stable state) and never detaches it on its own. Nothing then clears
+// Spec.NodeID, so the Faulted->Detached->RemountRequestedAt path in
+// ReconcileVolumeState never fires and the workload pod sits on a dead mount
+// indefinitely. Kick the pod directly — the same mechanism the
+// ShareManager-error path uses — so deleting it releases the volume, which
+// detaches, rebuilds the EF on reattach, and remounts the fresh device. Only
+// request the remount on the transition into Faulted so the replacement pod is
+// not deleted again every reconcile while the EF is still recovering.
+func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, e *longhorn.Engine, rs map[string]*longhorn.Replica, efs map[string]*longhorn.EngineFrontend, log *logrus.Entry) error {
+	if !types.IsDataEngineV2(v.Spec.DataEngine) {
+		return nil
+	}
+	ef, err := pickCurrentEngineFrontend(v, efs)
+	if err != nil || ef == nil || ef.Status.CurrentState != longhorn.InstanceStateError {
+		return nil
+	}
+	attachedOrExpectedAttached := v.Status.CurrentNodeID != "" ||
+		(v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)
+	if !attachedOrExpectedAttached {
+		return nil
+	}
+
+	wasFaulted := v.Status.Robustness == longhorn.VolumeRobustnessFaulted
+
+	log.Warn("EngineFrontend of volume dead unexpectedly, setting v.Status.Robustness to faulted")
+	msg := fmt.Sprintf("EngineFrontend of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
+	c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
+	e.Spec.LogRequested = true
+	for _, r := range rs {
+		if r.Status.CurrentState == longhorn.InstanceStateRunning {
+			r.Spec.LogRequested = true
+			rs[r.Name] = r
+		}
+	}
+	v.Status.Robustness = longhorn.VolumeRobustnessFaulted
+	if err := c.handleDelinquentAndStaleStateForFaultedRWXVolume(v); err != nil {
+		return err
+	}
+
+	if !wasFaulted {
+		v.Status.RemountRequestedAt = c.nowHandler()
+		remountMsg := fmt.Sprintf("Volume %v requested remount at %v after EngineFrontend error", v.Name, v.Status.RemountRequestedAt)
+		c.eventRecorder.Event(v, corev1.EventTypeNormal, constant.EventReasonRemount, remountMsg)
+	}
+	return nil
 }
 
 func (c *VolumeController) requestRemountIfFileSystemReadOnly(v *longhorn.Volume, e *longhorn.Engine) {

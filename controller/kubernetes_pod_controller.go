@@ -716,7 +716,22 @@ func (kc *KubernetesPodController) handlePodDeletionIfVolumeRequestRemount(pod *
 				return nil
 			}
 
+			// A remount requested because a v2 EngineFrontend died (the dm-linear
+			// block device is gone/EIO) means the consuming pod's mount is dead.
+			// A graceful (30s) termination lets the workload run its preStop/SIGTERM
+			// and attempt a final flush against that dead device, which parks in
+			// uninterruptible D-state and wedges the pod (and, en masse, the host).
+			// When the EF is confirmed in Error at delete time there is nothing to
+			// flush, so force-delete (grace 0): kubelet SIGKILLs the workload
+			// immediately and tears down the sandbox without waiting on a flush
+			// that can never complete. For any other remount trigger (auto-salvage,
+			// share-manager, read-only fs) where the device may be live, keep the
+			// graceful 30s so the workload can flush before being recreated.
 			gracePeriod := int64(30)
+			if kc.remountDueToV2EngineFrontendError(vol) {
+				gracePeriod = 0
+				kc.logger.Infof("Force-deleting pod %v (grace 0) for remount of volume %v: its v2 EngineFrontend is in Error (dead device); a graceful termination would wedge on the dead mount", pod.GetName(), vol.GetName())
+			}
 			err := kc.kubeClient.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.GetName(), metav1.DeleteOptions{
 				GracePeriodSeconds: &gracePeriod,
 			})
@@ -730,6 +745,26 @@ func (kc *KubernetesPodController) handlePodDeletionIfVolumeRequestRemount(pod *
 	}
 
 	return nil
+}
+
+// remountDueToV2EngineFrontendError reports whether the remount of vol was
+// triggered by a v2 EngineFrontend death (the dm-linear block device is gone),
+// which is the case where a graceful pod termination would attempt to flush
+// against a dead device and wedge in D-state. It is used to decide between a
+// force-delete (grace 0) and the default graceful (30s) deletion.
+//
+// The check is deliberately narrow: only a v2 volume whose CURRENT
+// EngineFrontend is in Error state qualifies. A missing/lookup-error EF, a v1
+// volume, or an EF in any other state returns false (fall back to graceful).
+func (kc *KubernetesPodController) remountDueToV2EngineFrontendError(vol *longhorn.Volume) bool {
+	if !types.IsDataEngineV2(vol.Spec.DataEngine) {
+		return false
+	}
+	ef, err := kc.ds.GetVolumeCurrentEngineFrontend(vol.Name)
+	if err != nil || ef == nil {
+		return false
+	}
+	return ef.Status.CurrentState == longhorn.InstanceStateError
 }
 
 func (kc *KubernetesPodController) isShareManagerServing(volumeName string, pod *corev1.Pod) (bool, error) {
