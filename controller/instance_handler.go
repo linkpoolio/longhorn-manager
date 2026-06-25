@@ -74,6 +74,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -95,6 +97,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -111,6 +115,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 			status.IP = ""
 			status.StorageIP = ""
 			status.Port = 0
+			status.TcpPort = 0
+			status.RdmaPort = 0
 			status.UblkID = 0
 			status.UUID = ""
 			h.resetInstanceErrorCondition(status)
@@ -132,6 +138,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -156,6 +164,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -192,6 +202,12 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 				log.Warnf("Instance %v is state running in instance manager %s, but its status Port %d does not match the instance manager recorded Port %d", instanceName, im.Name, status.Port, instance.Status.PortStart)
 			}
 			status.Port = int(instance.Status.PortStart)
+		}
+		if status.TcpPort != int(instance.Status.TcpPort) {
+			status.TcpPort = int(instance.Status.TcpPort)
+		}
+		if status.RdmaPort != int(instance.Status.RdmaPort) {
+			status.RdmaPort = int(instance.Status.RdmaPort)
 		}
 		if status.UblkID != instance.Status.UblkID {
 			status.UblkID = instance.Status.UblkID
@@ -265,6 +281,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -278,6 +296,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -290,6 +310,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -319,6 +341,21 @@ func (h *InstanceHandler) getNameFromObj(obj runtime.Object) (string, error) {
 		return "", err
 	}
 	return metadata.GetName(), nil
+}
+
+// shouldHealStaleInstanceManagerRef decides whether an instance's stale
+// status.InstanceManagerName (pointing at an IM CR that no longer exists) may
+// be rewritten to the freshly resolved IM. Heal when the resolved IM reports
+// the instance (live handover), or when the instance is not Running -- a
+// stopped/errored instance must be recreated on the resolved IM, and the
+// creation path reads the stale ref first (GetInstance), errors hard on the
+// deleted IM CR, and wedges the instance until the ref is fixed (observed as
+// four volumes stuck attaching after an IM roll). Only a Running instance not
+// reported by the resolved IM keeps its stale ref, so the normal not-found
+// handling resets it instead of silently repointing a live instance at an IM
+// that does not own it.
+func shouldHealStaleInstanceManagerRef(ownedByResolvedIM bool, currentState longhorn.InstanceState) bool {
+	return ownedByResolvedIM || currentState != longhorn.InstanceStateRunning
 }
 
 func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn.InstanceSpec, status *longhorn.InstanceStatus) (err error) {
@@ -372,6 +409,23 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 	}
 	if im != nil {
 		log = log.WithFields(logrus.Fields{"instanceManager": im.Name})
+		// If the IM CR was deleted and recreated (e.g. after an image bump
+		// or a node-side cleanup), the instance's status still references
+		// the old IM by name. ReconcileInstanceManager has already resolved
+		// the current IM via the disk lookup; sync the status field so
+		// downstream reconcilers don't follow a dangling pointer.
+		if status.InstanceManagerName != "" && status.InstanceManagerName != im.Name {
+			// See shouldHealStaleInstanceManagerRef for the heal policy.
+			imInstances, err := h.getInstancesFromInstanceManager(runtimeObj, im)
+			if err != nil {
+				return err
+			}
+			_, ownedByResolvedIM := imInstances[instanceName]
+			if shouldHealStaleInstanceManagerRef(ownedByResolvedIM, status.CurrentState) {
+				log.Warnf("Healing stale instance manager ref for %v: %s -> %s", instanceName, status.InstanceManagerName, im.Name)
+				status.InstanceManagerName = im.Name
+			}
+		}
 	}
 
 	if spec.LogRequested {

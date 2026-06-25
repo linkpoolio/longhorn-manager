@@ -1,6 +1,9 @@
 package csi
 
 import (
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -246,4 +249,32 @@ func TestRequiresSharedAccess(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestGetXFSDataSize(t *testing.T) {
+	assert := assert.New(t)
+	dir := t.TempDir()
+
+	// Craft an XFS superblock: magic "XFSB", sb_blocksize=4096 @4 (BE u32),
+	// sb_dblocks=1000 @8 (BE u64) => data size = 4096*1000.
+	xfsDev := filepath.Join(dir, "xfs.img")
+	sb := make([]byte, 512)
+	copy(sb[0:4], []byte("XFSB"))
+	binary.BigEndian.PutUint32(sb[4:8], 4096)
+	binary.BigEndian.PutUint64(sb[8:16], 1000)
+	require.NoError(t, os.WriteFile(xfsDev, sb, 0600))
+
+	size, err := getXFSDataSize(xfsDev)
+	assert.NoError(err)
+	assert.Equal(int64(4096*1000), size)
+
+	// Non-XFS device (no magic) -> error, never a bogus size.
+	other := filepath.Join(dir, "ext.img")
+	require.NoError(t, os.WriteFile(other, make([]byte, 512), 0600))
+	_, err = getXFSDataSize(other)
+	assert.Error(err)
+
+	// Missing device -> error.
+	_, err = getXFSDataSize(filepath.Join(dir, "does-not-exist"))
+	assert.Error(err)
 }

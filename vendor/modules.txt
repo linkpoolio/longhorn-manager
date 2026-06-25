@@ -283,7 +283,7 @@ github.com/longhorn/backupstore/logging
 github.com/longhorn/backupstore/systembackup
 github.com/longhorn/backupstore/types
 github.com/longhorn/backupstore/util
-# github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2
+# github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2 => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
 ## explicit; go 1.25.0
 github.com/longhorn/go-common-libs/backingimage
 github.com/longhorn/go-common-libs/backup
@@ -307,7 +307,7 @@ github.com/longhorn/go-iscsi-helper/iscsidev
 github.com/longhorn/go-iscsi-helper/longhorndev
 github.com/longhorn/go-iscsi-helper/types
 github.com/longhorn/go-iscsi-helper/util
-# github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8
+# github.com/longhorn/go-spdk-helper v0.6.3-0.20260601101353-0be728aae70e => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260609184748-8002e3abaf32
 ## explicit; go 1.25.3
 github.com/longhorn/go-spdk-helper/pkg/initiator
 github.com/longhorn/go-spdk-helper/pkg/jsonrpc
@@ -323,8 +323,8 @@ github.com/longhorn/longhorn-engine/pkg/meta
 github.com/longhorn/longhorn-engine/pkg/replica/client
 github.com/longhorn/longhorn-engine/pkg/types
 github.com/longhorn/longhorn-engine/pkg/util
-# github.com/longhorn/longhorn-instance-manager v1.13.0-dev-20260531.0.20260610073602-18980f82144c
-## explicit; go 1.26
+# github.com/longhorn/longhorn-instance-manager v1.12.0-dev-20260503.0.20260515063452-1ecf693e484f => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338
+## explicit; go 1.26.0
 github.com/longhorn/longhorn-instance-manager/pkg/api
 github.com/longhorn/longhorn-instance-manager/pkg/client
 github.com/longhorn/longhorn-instance-manager/pkg/meta
@@ -334,7 +334,7 @@ github.com/longhorn/longhorn-instance-manager/pkg/util
 ## explicit; go 1.26.0
 github.com/longhorn/longhorn-share-manager/pkg/client
 github.com/longhorn/longhorn-share-manager/pkg/types
-# github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260531.0.20260608045156-f8dd876a4b6a
+# github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260531.0.20260601104844-f87a76cf8bc2 => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260610092230-6ea821a31715
 ## explicit; go 1.26.0
 github.com/longhorn/longhorn-spdk-engine/pkg/api
 github.com/longhorn/longhorn-spdk-engine/pkg/client
@@ -348,8 +348,8 @@ github.com/longhorn/longhorn-spdk-engine/pkg/spdk/disk/virtio-scsi
 github.com/longhorn/longhorn-spdk-engine/pkg/types
 github.com/longhorn/longhorn-spdk-engine/pkg/util
 github.com/longhorn/longhorn-spdk-engine/pkg/util/broadcaster
-# github.com/longhorn/types v0.0.0-20260522011813-8f1780fad833
-## explicit; go 1.24.0
+# github.com/longhorn/types v0.0.0-20260522011813-8f1780fad833 => github.com/linkpoolio/types v0.0.0-20260610091928-a08cb4ff0b7a
+## explicit; go 1.25.0
 github.com/longhorn/types/pkg/generated/bimrpc
 github.com/longhorn/types/pkg/generated/enginerpc
 github.com/longhorn/types/pkg/generated/imrpc
@@ -609,10 +609,10 @@ golang.org/x/net/trace
 ## explicit; go 1.25.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.21.0
+# golang.org/x/sync v0.20.0
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
-# golang.org/x/sys v0.46.0
+# golang.org/x/sys v0.44.0
 ## explicit; go 1.25.0
 golang.org/x/sys/cpu
 golang.org/x/sys/execabs
@@ -1330,7 +1330,7 @@ k8s.io/metrics/pkg/client/clientset/versioned
 k8s.io/metrics/pkg/client/clientset/versioned/scheme
 k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1alpha1
 k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1
-# k8s.io/mount-utils v0.36.2 => k8s.io/mount-utils v0.36.2
+# k8s.io/mount-utils v0.36.1 => k8s.io/mount-utils v0.36.1
 ## explicit; go 1.26.0
 k8s.io/mount-utils
 # k8s.io/utils v0.0.0-20260507154919-ff6756f316d2
@@ -1387,7 +1387,7 @@ sigs.k8s.io/yaml/kyaml
 # k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.36.1
 # k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.36.1
 # k8s.io/endpointslice => k8s.io/endpointslice v0.36.1
-# k8s.io/externaljwt => k8s.io/externaljwt v0.36.2
+# k8s.io/externaljwt => k8s.io/externaljwt v0.36.1
 # k8s.io/kms => k8s.io/kms v0.36.1
 # k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.36.1
 # k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.36.1
@@ -1397,8 +1397,13 @@ sigs.k8s.io/yaml/kyaml
 # k8s.io/kubelet => k8s.io/kubelet v0.36.1
 # k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.30.14
 # k8s.io/metrics => k8s.io/metrics v0.36.1
-# k8s.io/mount-utils => k8s.io/mount-utils v0.36.2
+# k8s.io/mount-utils => k8s.io/mount-utils v0.36.1
 # k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.1
 # k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.1
 # k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.36.1
 # k8s.io/sample-controller => k8s.io/sample-controller v0.36.1
+# github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260609184748-8002e3abaf32
+# github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260610091928-a08cb4ff0b7a
+# github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260610092230-6ea821a31715
+# github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338
+# github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080

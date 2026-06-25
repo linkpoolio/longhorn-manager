@@ -633,19 +633,51 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	// https://github.com/kubernetes/kubernetes/issues/94929
 	// https://github.com/kubernetes-sigs/aws-ebs-csi-driver/pull/753
 	resizer := mount.NewResizeFs(utilexec.New())
-	if needsResize, err := resizer.NeedResize(devicePath, stagingTargetPath); err != nil {
-		return nil, status.Error(codes.Internal, err.Error())
-	} else if needsResize {
+	resize := func() error {
 		if resized, err := resizer.Resize(devicePath, stagingTargetPath); err != nil {
 			log.WithError(err).Errorf("Mounted volume %v on node %v failed required filesystem resize", volumeID, ns.nodeID)
-			return nil, status.Error(codes.Internal, err.Error())
+			return status.Error(codes.Internal, err.Error())
 		} else if resized {
 			log.Infof("Mounted volume %v on node %v successfully resized filesystem after mount", volumeID, ns.nodeID)
 		} else {
 			log.Infof("Mounted volume %v on node %v already has correct filesystem size", volumeID, ns.nodeID)
 		}
+		return nil
+	}
+
+	if fsType == "xfs" {
+		// k8s mount-utils NeedResize() returns true unconditionally for xfs, so the
+		// xfs_growfs it triggers runs on every stage. That growfs can spuriously fail
+		// with "not a mounted XFS filesystem" even when no grow is needed, which aborts
+		// the stage and leaves the volume unmountable. Only grow when the block device
+		// is genuinely larger than the xfs data section, comparing sizes read directly
+		// off the device so the check does not depend on xfs tooling that can mis-detect
+		// the mount. A genuinely-expanded (e.g. cloned/restored bigger) volume still grows.
+		deviceSize, derr := getBlockDeviceSize(devicePath)
+		xfsSize, xerr := getXFSDataSize(devicePath)
+		switch {
+		case derr != nil || xerr != nil:
+			log.Warnf("Mounted volume %v on node %v: could not determine device/xfs size (deviceErr=%v, xfsErr=%v); attempting resize", volumeID, ns.nodeID, derr, xerr)
+			if err := resize(); err != nil {
+				return nil, err
+			}
+		case deviceSize > xfsSize:
+			if err := resize(); err != nil {
+				return nil, err
+			}
+		default:
+			log.Infof("Mounted volume %v on node %v: xfs already fills the device (%v bytes), skipping resize", volumeID, ns.nodeID, deviceSize)
+		}
 	} else {
-		log.Infof("Mounted volume %v on node %v does not require filesystem resize", volumeID, ns.nodeID)
+		if needsResize, err := resizer.NeedResize(devicePath, stagingTargetPath); err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		} else if needsResize {
+			if err := resize(); err != nil {
+				return nil, err
+			}
+		} else {
+			log.Infof("Mounted volume %v on node %v does not require filesystem resize", volumeID, ns.nodeID)
+		}
 	}
 
 	log.Infof("Mounted volume %v on node %v via device %v", volumeID, ns.nodeID, devicePath)
