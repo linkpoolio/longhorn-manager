@@ -62,8 +62,7 @@ type BackingImage struct {
 
 	UpdateCh chan interface{}
 
-	newServiceClient func(address string) (backingImageServiceClient, error)
-	log              *safelog.SafeLogger
+	log *safelog.SafeLogger
 }
 
 func ServiceBackingImageToProtoBackingImage(bi *BackingImage) *spdkrpc.BackingImage {
@@ -86,20 +85,11 @@ func ServiceBackingImageToProtoBackingImage(bi *BackingImage) *spdkrpc.BackingIm
 	return res
 }
 
-func NewBackingImage(ctx context.Context, backingImageName, backingImageUUID, lvsUUID string,
-	size uint64, checksum string, updateCh chan interface{},
-	newServiceClient func(address string) (backingImageServiceClient, error)) *BackingImage {
-
+func NewBackingImage(ctx context.Context, backingImageName, backingImageUUID, lvsUUID string, size uint64, checksum string, updateCh chan interface{}) *BackingImage {
 	log := logrus.StandardLogger().WithFields(logrus.Fields{
 		"backingImagename": backingImageName,
 		"lvsUUID":          lvsUUID,
 	})
-
-	if newServiceClient == nil {
-		newServiceClient = func(address string) (backingImageServiceClient, error) {
-			return GetServiceClient(address)
-		}
-	}
 
 	return &BackingImage{
 		ctx:              ctx,
@@ -110,7 +100,6 @@ func NewBackingImage(ctx context.Context, backingImageName, backingImageUUID, lv
 		ExpectedChecksum: checksum,
 		State:            types.BackingImageStateStarting,
 		UpdateCh:         updateCh,
-		newServiceClient: newServiceClient,
 		log:              safelog.NewSafeLogger(log),
 	}
 }
@@ -344,7 +333,7 @@ func (bi *BackingImage) BackingImageExpose(spdkClient *spdkclient.Client, superi
 		return "", errors.Wrapf(err, "failed to create executor")
 	}
 
-	subsystemNQN, controllerName, err := exposeSnapshotLvolBdev(spdkClient, bi.LvsName, backingImageSnapLvolName, podIP, port, executor)
+	subsystemNQN, controllerName, err := exposeSnapshotLvolBdev(spdkClient, bi.LvsName, backingImageSnapLvolName, podIP, port, DefaultNvmfTransport, executor)
 	if err != nil {
 		bi.log.WithError(err).Errorf("Failed to expose lvol bdev")
 		return "", err
@@ -511,7 +500,7 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 
 	// backingImageTempHeadName will be "bi-${biName}-disk-${lvsUUID}-temp-head"
 	backingImageTempHeadName := GetBackingImageTempHeadLvolName(bi.Name, bi.LvsUUID)
-	biTempHeadUUID, err = backingImageBdevLvolCreate(spdkClient, "", bi.LvsUUID, backingImageTempHeadName, util.BytesToMiB(bi.Size), "", true)
+	biTempHeadUUID, err = backingImageBdevLvolCreate(spdkClient, "", bi.LvsUUID, backingImageTempHeadName, util.BytesToMiB(bi.Size), spdktypes.BdevLvolClearMethod(defaultLvolClearMethod), defaultThinProvision)
 	if err != nil {
 		return err
 	}
@@ -541,7 +530,7 @@ func (bi *BackingImage) prepareBackingImageSnapshot(spdkClient *spdkclient.Clien
 	if err != nil {
 		return errors.Wrapf(err, "failed to create executor")
 	}
-	subsystemNQN, controllerName, err := backingImageExposeSnapshotLvolBdev(spdkClient, bi.LvsName, backingImageTempHeadName, podIP, port, executor)
+	subsystemNQN, controllerName, err := backingImageExposeSnapshotLvolBdev(spdkClient, bi.LvsName, backingImageTempHeadName, podIP, port, DefaultNvmfTransport, executor)
 	if err != nil {
 		bi.log.WithError(err).Errorf("Failed to expose head lvol")
 		return err
@@ -692,7 +681,7 @@ func (bi *BackingImage) prepareFromSync(targetFh *os.File, fromAddress, srcLvsUU
 	if fromAddress == "" || srcLvsUUID == "" {
 		return errors.Wrapf(err, "missing required source backing image service address %v or source lvsUUID %v", fromAddress, srcLvsUUID)
 	}
-	srcBackingImageServiceCli, err := bi.newServiceClient(fromAddress)
+	srcBackingImageServiceCli, err := backingImageGetServiceClient(fromAddress)
 	if err != nil {
 		return errors.Wrapf(err, "failed to init the source backing image spdk service client")
 	}

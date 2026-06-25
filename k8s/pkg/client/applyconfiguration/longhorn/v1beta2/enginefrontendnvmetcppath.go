@@ -27,6 +27,9 @@ type EngineFrontendNvmeTCPPathApplyConfiguration struct {
 	NQN        *string `json:"nqn,omitempty"`
 	NGUID      *string `json:"nguid,omitempty"`
 	ANAState   *string `json:"anaState,omitempty"`
+	// Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+	// over, as observed by the instance manager.
+	Transport *string `json:"transport,omitempty"`
 }
 
 // EngineFrontendNvmeTCPPathApplyConfiguration constructs a declarative configuration of the EngineFrontendNvmeTCPPath type for use with
@@ -80,5 +83,13 @@ func (b *EngineFrontendNvmeTCPPathApplyConfiguration) WithNGUID(value string) *E
 // If called multiple times, the ANAState field is set to the value of the last call.
 func (b *EngineFrontendNvmeTCPPathApplyConfiguration) WithANAState(value string) *EngineFrontendNvmeTCPPathApplyConfiguration {
 	b.ANAState = &value
+	return b
+}
+
+// WithTransport sets the Transport field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Transport field is set to the value of the last call.
+func (b *EngineFrontendNvmeTCPPathApplyConfiguration) WithTransport(value string) *EngineFrontendNvmeTCPPathApplyConfiguration {
+	b.Transport = &value
 	return b
 }

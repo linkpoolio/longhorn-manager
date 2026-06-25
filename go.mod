@@ -2,6 +2,8 @@ module github.com/longhorn/longhorn-manager
 
 go 1.26.0
 
+toolchain go1.26.3
+
 // Replace directives are required for dependencies in this section because:
 // - This module imports k8s.io/kubernetes.
 // - The development for all of these dependencies is done at kubernetes/staging and then synced to other repos.
@@ -36,7 +38,7 @@ replace (
 	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.36.1
 	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.36.1
 	k8s.io/endpointslice => k8s.io/endpointslice v0.36.1
-	k8s.io/externaljwt => k8s.io/externaljwt v0.36.2
+	k8s.io/externaljwt => k8s.io/externaljwt v0.36.1
 	k8s.io/kms => k8s.io/kms v0.36.1
 	k8s.io/kube-aggregator => k8s.io/kube-aggregator v0.36.1
 	k8s.io/kube-controller-manager => k8s.io/kube-controller-manager v0.36.1
@@ -46,7 +48,7 @@ replace (
 	k8s.io/kubelet => k8s.io/kubelet v0.36.1
 	k8s.io/legacy-cloud-providers => k8s.io/legacy-cloud-providers v0.30.14
 	k8s.io/metrics => k8s.io/metrics v0.36.1
-	k8s.io/mount-utils => k8s.io/mount-utils v0.36.2
+	k8s.io/mount-utils => k8s.io/mount-utils v0.36.1
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.1
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.1
 	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.36.1
@@ -57,6 +59,7 @@ require (
 	github.com/cockroachdb/errors v1.13.0
 	github.com/container-storage-interface/spec v1.12.0
 	github.com/docker/go-connections v0.7.0
+	github.com/go-co-op/gocron v1.37.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/mux v1.8.1
@@ -68,11 +71,11 @@ require (
 	github.com/longhorn/backupstore v0.0.0-20260525102750-1ed7dde50b68
 	github.com/longhorn/go-common-libs v0.0.0-20260525102658-c0739cd3e2c2
 	github.com/longhorn/go-iscsi-helper v0.0.0-20260331100542-4c4c6f91525b
-	github.com/longhorn/go-spdk-helper v0.6.3-0.20260618001233-9facf639a5f8
+	github.com/longhorn/go-spdk-helper v0.6.3-0.20260601101353-0be728aae70e
 	github.com/longhorn/longhorn-engine v1.12.0-dev-20260503.0.20260514055128-ec3f7dbb512f
-	github.com/longhorn/longhorn-instance-manager v1.13.0-dev-20260531.0.20260610073602-18980f82144c
+	github.com/longhorn/longhorn-instance-manager v1.12.0-dev-20260503.0.20260515063452-1ecf693e484f
 	github.com/longhorn/longhorn-share-manager v1.12.0-dev-20260503.0.20260510090948-3e59157e1fb2
-	github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260531.0.20260608045156-f8dd876a4b6a
+	github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260531.0.20260601104844-f87a76cf8bc2
 	github.com/prometheus/client_golang v1.23.2
 	// dynamiclistener v0.7.1 has nil pointer dereference issues, so temporarily pin to v0.7.0
 	github.com/rancher/dynamiclistener v0.8.2
@@ -81,13 +84,14 @@ require (
 	github.com/robfig/cron v1.2.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
+	github.com/urfave/cli v1.22.17
 	golang.org/x/mod v0.36.0
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.44.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.81.1
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.36.1
 	k8s.io/apiextensions-apiserver v0.36.1
 	k8s.io/apimachinery v0.36.1
@@ -95,17 +99,13 @@ require (
 	k8s.io/client-go v0.36.1
 	k8s.io/kubernetes v1.36.1
 	k8s.io/metrics v0.36.1
-	k8s.io/mount-utils v0.36.2
+	k8s.io/mount-utils v0.36.1
 	k8s.io/utils v0.0.0-20260507154919-ff6756f316d2
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0
 )
 
-require (
-	github.com/go-co-op/gocron v1.37.0
-	github.com/urfave/cli v1.22.17
-	gopkg.in/yaml.v2 v2.4.0
-)
+require github.com/longhorn/types v0.0.0-20260522011813-8f1780fad833
 
 require (
 	github.com/0xPolygon/polygon-edge v1.3.3 // indirect
@@ -140,7 +140,6 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
-	github.com/longhorn/types v0.0.0-20260522011813-8f1780fad833 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/lxzan/gws v1.8.9 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
@@ -159,6 +158,7 @@ require (
 	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 )
@@ -211,7 +211,7 @@ require (
 	go.uber.org/multierr v1.11.0
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0
+	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.37.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
@@ -227,3 +227,11 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260609184748-8002e3abaf32
+
+replace github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260610091928-a08cb4ff0b7a
+
+replace github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260610092230-6ea821a31715
+
+replace github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338

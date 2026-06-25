@@ -65,6 +65,10 @@ type EngineFrontendNvmeTCPPath struct {
 	NGUID string `json:"nguid,omitempty"`
 	// +optional
 	ANAState string `json:"anaState,omitempty"`
+	// Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+	// over, as observed by the instance manager.
+	// +optional
+	Transport string `json:"transport,omitempty"`
 }
 
 // EngineFrontendStatus defines the observed state of the Longhorn engine frontend

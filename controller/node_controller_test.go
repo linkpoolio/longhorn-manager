@@ -2502,3 +2502,115 @@ func newTestNodeController(lhClient *lhfake.Clientset, kubeClient *fake.Clientse
 func fakeTopologyLabelsChecker(kubeClient clientset.Interface, vers string) (bool, error) {
 	return false, nil
 }
+
+// The redundant (non-default-image) instance manager cleanup must never delete
+// an IM that is only mid-wobble. Two guards are pinned here:
+//  1. An instance in Error state in the IM's maps blocks cleanup -- an errored
+//     engine/engine-frontend on a live IM recovers in place, while deleting
+//     the IM kills the pod under every volume it hosts (observed during a
+//     manager fleet restart: first monitor poll reported EngineFrontends as
+//     Error and the running/starting-only gate deleted a live IM).
+//  2. When the IM CR is not Running its instance maps are not authoritative
+//     (the Error transition erases them), so cleanup requires that no
+//     engine/engine-frontend/replica CR still references the IM. True orphan
+//     CRs with no references are still cleaned.
+func (s *NodeControllerSuite) TestRedundantInstanceManagerCleanupGuards(c *C) {
+	datastore.SkipListerCheck = true
+
+	const redundantImage = "longhorn-instance-manager:old"
+	const redundantIMName = "instance-manager-redundant"
+
+	fixture := &NodeControllerFixture{
+		lhNodes: map[string]*longhorn.Node{
+			TestNode1: newNode(TestNode1, TestNamespace, true, longhorn.ConditionStatusUnknown, ""),
+		},
+		lhSettings: map[string]*longhorn.Setting{
+			string(types.SettingNameDefaultInstanceManagerImage): newDefaultInstanceManagerImageSetting(),
+		},
+		lhInstanceManagers: map[string]*longhorn.InstanceManager{
+			TestInstanceManagerName: DefaultInstanceManagerTestNode1.DeepCopy(),
+		},
+	}
+	s.initTest(c, fixture)
+
+	type testCase struct {
+		imState            longhorn.InstanceManagerState
+		engineFrontends    map[string]longhorn.InstanceProcess
+		referencingReplica bool
+		expectKept         bool
+	}
+	testCases := map[string]testCase{
+		"running IM with errored instance in maps is kept": {
+			imState: longhorn.InstanceManagerStateRunning,
+			engineFrontends: map[string]longhorn.InstanceProcess{
+				"test-ef": {Status: longhorn.InstanceProcessStatus{State: longhorn.InstanceStateError}},
+			},
+			expectKept: true,
+		},
+		"running IM with running instance is kept": {
+			imState: longhorn.InstanceManagerStateRunning,
+			engineFrontends: map[string]longhorn.InstanceProcess{
+				"test-ef": {Status: longhorn.InstanceProcessStatus{State: longhorn.InstanceStateRunning}},
+			},
+			expectKept: true,
+		},
+		"errored IM still referenced by a replica CR is kept": {
+			imState:            longhorn.InstanceManagerStateError,
+			referencingReplica: true,
+			expectKept:         true,
+		},
+		"errored IM with no references is cleaned": {
+			imState:    longhorn.InstanceManagerStateError,
+			expectKept: false,
+		},
+		"running IM with no instances is cleaned": {
+			imState:    longhorn.InstanceManagerStateRunning,
+			expectKept: false,
+		},
+	}
+
+	for name, tc := range testCases {
+		fmt.Printf("testing %v\n", name)
+
+		im := newInstanceManager(redundantIMName, tc.imState, TestOwnerID1, TestNode1, TestIP1,
+			nil, tc.engineFrontends, nil, longhorn.DataEngineTypeV1, redundantImage, false)
+		created, err := s.lhClient.LonghornV1beta2().InstanceManagers(TestNamespace).Create(context.TODO(), im, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		c.Assert(s.lhInstanceManagerIndexer.Add(created), IsNil)
+
+		var replica *longhorn.Replica
+		if tc.referencingReplica {
+			replica = &longhorn.Replica{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-replica-ref", Namespace: TestNamespace},
+				Spec:       longhorn.ReplicaSpec{InstanceSpec: longhorn.InstanceSpec{NodeID: TestNode1}},
+				Status: longhorn.ReplicaStatus{
+					InstanceStatus: longhorn.InstanceStatus{
+						InstanceManagerName: redundantIMName,
+						CurrentState:        longhorn.InstanceStateError,
+					},
+				},
+			}
+			replica, err = s.lhClient.LonghornV1beta2().Replicas(TestNamespace).Create(context.TODO(), replica, metav1.CreateOptions{})
+			c.Assert(err, IsNil)
+			c.Assert(s.lhReplicaIndexer.Add(replica), IsNil)
+		}
+
+		err = s.controller.syncInstanceManagers(fixture.lhNodes[TestNode1])
+		c.Assert(err, IsNil, Commentf("case %q", name))
+
+		_, getErr := s.lhClient.LonghornV1beta2().InstanceManagers(TestNamespace).Get(context.TODO(), redundantIMName, metav1.GetOptions{})
+		if tc.expectKept {
+			c.Assert(getErr, IsNil, Commentf("case %q: redundant IM was deleted but must be kept", name))
+		} else {
+			c.Assert(apierrors.IsNotFound(getErr), Equals, true, Commentf("case %q: redundant IM should have been cleaned", name))
+		}
+
+		// Reset for the next case.
+		_ = s.lhClient.LonghornV1beta2().InstanceManagers(TestNamespace).Delete(context.TODO(), redundantIMName, metav1.DeleteOptions{})
+		c.Assert(s.lhInstanceManagerIndexer.Delete(created), IsNil)
+		if replica != nil {
+			c.Assert(s.lhClient.LonghornV1beta2().Replicas(TestNamespace).Delete(context.TODO(), replica.Name, metav1.DeleteOptions{}), IsNil)
+			c.Assert(s.lhReplicaIndexer.Delete(replica), IsNil)
+		}
+	}
+}

@@ -1113,6 +1113,23 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 		}
 	}
 
+	// If the underlying kube node is unschedulable (cordoned, mid-drain),
+	// defer v2 IM CR deletion until the node is back schedulable. Kubelet's
+	// eviction respects terminationGracePeriodSeconds and runs the v2 IM's
+	// preStop hook, which drains NVMe-oF listeners and exits SPDK cleanly.
+	// Deleting the IM CR here cascades to a redundant pods.Delete that can
+	// race kubelet's eviction and skip preStop entirely. Once the pod has
+	// terminated naturally, a later sync (after uncordon) cleans up any
+	// orphan IM CRs. Only the v2 deletion path is deferred: IM creation and
+	// image-mismatch cleanup for v1 IMs keep upstream behavior so a cordoned
+	// node does not stall the rest of the IM sync for the whole cordon
+	// duration.
+	kubeNode, err := nc.ds.GetKubernetesNodeRO(node.Name)
+	if err != nil && !datastore.ErrorIsNotFound(err) {
+		return err
+	}
+	isNodeCordoned := kubeNode != nil && kubeNode.Spec.Unschedulable
+
 	imTypeDataEngines := nc.getImTypeDataEngines(node)
 
 	for imType, dataEngines := range imTypeDataEngines {
@@ -1128,11 +1145,21 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 						im.Name, im.Spec.NodeID, types.GetLonghornLabelKey(types.LonghornLabelNode), im.Labels[types.GetLonghornLabelKey(types.LonghornLabelNode)])
 				}
 
-				runningOrStartingInstanceFound := false
+				// An instance in Error state still blocks cleanup: an errored
+				// engine/engine-frontend on a live IM is recoverable in place
+				// (the IM process and its kernel-visible devices are intact),
+				// while deleting the IM kills the pod and converts a transient
+				// wobble into a forced detach of every volume it hosts. This is
+				// not theoretical: during a manager fleet restart the first
+				// monitor poll briefly reported EngineFrontends as Error, and
+				// the old running/starting-only gate deleted a live IM with two
+				// attached volumes.
+				blockingInstanceFound := false
 				if im.Status.CurrentState == longhorn.InstanceManagerStateRunning && im.DeletionTimestamp == nil {
 					for _, instance := range types.ConsolidateInstances(im.Status.InstanceEngines, im.Status.InstanceEngineFrontends, im.Status.InstanceReplicas) {
-						if instance.Status.State == longhorn.InstanceStateRunning || instance.Status.State == longhorn.InstanceStateStarting {
-							runningOrStartingInstanceFound = true
+						if instance.Status.State == longhorn.InstanceStateRunning || instance.Status.State == longhorn.InstanceStateStarting ||
+							instance.Status.State == longhorn.InstanceStateError {
+							blockingInstanceFound = true
 							break
 						}
 					}
@@ -1150,14 +1177,14 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 						if err != nil {
 							return errors.Wrapf(err, "failed to check if v2 data engine is disabled on node %v", node.Name)
 						}
-						if disabled && !runningOrStartingInstanceFound {
+						if disabled && !blockingInstanceFound {
 							log.Infof("Cleaning up instance manager %v since v2 data engine is disabled for node %v", im.Name, node.Name)
 							cleanupRequired = true
 						}
 					}
 				} else {
-					// Clean up old instance managers if there is no running instance.
-					if runningOrStartingInstanceFound {
+					// Clean up old instance managers if there is no blocking instance.
+					if blockingInstanceFound {
 						cleanupRequired = false
 					}
 
@@ -1165,8 +1192,30 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 						cleanupRequired = false
 						log.Debugf("Skipping cleaning up non-default unknown instance manager %s", im.Name)
 					}
+
+					// When the IM CR is not Running its instance maps are not
+					// authoritative -- the transition to Error erases them, and
+					// Starting has not populated them yet. Before deleting,
+					// cross-check whether any instance CR still points at this
+					// IM in a non-terminal state; if so the IM is mid-wobble,
+					// not redundant. True orphan CRs (nothing references them)
+					// still get cleaned.
+					if cleanupRequired && im.Status.CurrentState != longhorn.InstanceManagerStateRunning {
+						referenced, err := nc.isInstanceManagerReferencedByInstances(im)
+						if err != nil {
+							return errors.Wrapf(err, "failed to check instance references for instance manager %v", im.Name)
+						}
+						if referenced {
+							cleanupRequired = false
+							log.Debugf("Skipping cleaning up non-default instance manager %s in state %v because instance CRs still reference it", im.Name, im.Status.CurrentState)
+						}
+					}
 				}
 				if cleanupRequired {
+					if isNodeCordoned && types.IsDataEngineV2(im.Spec.DataEngine) {
+						log.Debugf("Skipping cleanup of v2 instance manager %v on unschedulable node %v to let kubelet eviction run its preStop hook", im.Name, node.Name)
+						continue
+					}
 					log.Infof("Cleaning up the redundant instance manager %v when there is no running/starting instance", im.Name)
 					if err := nc.ds.DeleteInstanceManager(im.Name); err != nil {
 						return err
@@ -1213,6 +1262,55 @@ func (nc *NodeController) syncInstanceManagers(node *longhorn.Node) error {
 		}
 	}
 	return nil
+}
+
+// isInstanceManagerReferencedByInstances reports whether any engine,
+// engine-frontend, or replica CR still points at the given instance manager
+// (status.instanceManagerName) in a non-terminal state. Used as a deletion
+// guard when the IM CR's own instance maps cannot be trusted (state not
+// Running): an IM that instances still reference is mid-recovery, not
+// redundant, and deleting it would kill the pod under live volumes.
+func (nc *NodeController) isInstanceManagerReferencedByInstances(im *longhorn.InstanceManager) (bool, error) {
+	references := func(status *longhorn.InstanceStatus) bool {
+		if status.InstanceManagerName != im.Name {
+			return false
+		}
+		return status.CurrentState != longhorn.InstanceStateStopped &&
+			status.CurrentState != longhorn.InstanceStateTerminated &&
+			status.CurrentState != ""
+	}
+
+	engines, err := nc.ds.ListEnginesRO()
+	if err != nil {
+		return false, err
+	}
+	for _, e := range engines {
+		if references(&e.Status.InstanceStatus) {
+			return true, nil
+		}
+	}
+
+	engineFrontends, err := nc.ds.ListEngineFrontends()
+	if err != nil {
+		return false, err
+	}
+	for _, ef := range engineFrontends {
+		if references(&ef.Status.InstanceStatus) {
+			return true, nil
+		}
+	}
+
+	replicas, err := nc.ds.ListReplicasRO()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range replicas {
+		if references(&r.Status.InstanceStatus) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (nc *NodeController) createInstanceManager(node *longhorn.Node, imName, imImage string, imType longhorn.InstanceManagerType, dataEngine longhorn.DataEngineType) (*longhorn.InstanceManager, error) {

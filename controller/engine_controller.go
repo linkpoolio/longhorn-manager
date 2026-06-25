@@ -55,7 +55,7 @@ const (
 )
 
 var (
-	EnginePollInterval = 5 * time.Second
+	EnginePollInterval = 2 * time.Second
 	EnginePollTimeout  = 30 * time.Second
 
 	EngineMonitorConflictRetryCount = 5
@@ -69,6 +69,8 @@ var (
 	sizeUpdateLimit = 30 * time.Second
 	// number of consecutive actual size updates allowed during bursts
 	sizeUpdateBurst = 3
+
+	staleReplicaAddressRecreateTimeout = 2 * time.Minute
 )
 
 const (
@@ -363,9 +365,11 @@ func (ec *EngineController) syncEngine(key string) (err error) {
 	} else if len(engine.Spec.UpgradedReplicaAddressMap) == 0 {
 		syncReplicaAddressMap = true
 	}
-	if syncReplicaAddressMap && !reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) {
+	if syncReplicaAddressMap && (!reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) ||
+		!reflect.DeepEqual(engine.Status.CurrentReplicaTransportAddressMap, engine.Spec.ReplicaTransportAddressMap)) {
 		log.Infof("Updating engine current replica address map to %+v", engine.Spec.ReplicaAddressMap)
 		engine.Status.CurrentReplicaAddressMap = engine.Spec.ReplicaAddressMap
+		engine.Status.CurrentReplicaTransportAddressMap = engine.Spec.ReplicaTransportAddressMap
 		// Make sure the CurrentReplicaAddressMap persist in the etcd before continue
 		return nil
 	}
@@ -1003,6 +1007,61 @@ func (m *EngineMonitor) sync() bool {
 	return false
 }
 
+func shouldRecreateStaleV2Engine(engine *longhorn.Engine, volume *longhorn.Volume, now time.Time) (bool, string) {
+	if engine == nil {
+		return false, ""
+	}
+	if !types.IsDataEngineV2(engine.Spec.DataEngine) {
+		return false, ""
+	}
+	// The engine is already being deleted; do not race the deletion.
+	if engine.DeletionTimestamp != nil {
+		return false, ""
+	}
+	// An engine with a disabled frontend (e.g. during auto-salvage or
+	// maintenance attachment) has no endpoint by design.
+	if engine.Spec.DisableFrontend {
+		return false, ""
+	}
+	// A migration target engine never has an endpoint by design; deleting it
+	// would break the live migration. If the owning volume could not be
+	// resolved, fail safe and skip the recreation.
+	if volume == nil || volume.Spec.MigrationNodeID != "" {
+		return false, ""
+	}
+	if engine.Status.CurrentState != longhorn.InstanceStateRunning {
+		return false, ""
+	}
+	if engine.Status.Endpoint != "" {
+		return false, ""
+	}
+	if len(engine.Status.ReplicaModeMap) == 0 {
+		return false, ""
+	}
+	stuck := 0
+	for replica, mode := range engine.Status.ReplicaModeMap {
+		if mode != longhorn.ReplicaModeERR {
+			return false, ""
+		}
+		tsStr, ok := engine.Status.ReplicaTransitionTimeMap[replica]
+		if !ok {
+			return false, ""
+		}
+		ts, err := time.Parse(time.RFC3339Nano, tsStr)
+		if err != nil {
+			return false, ""
+		}
+		if now.Sub(ts) < staleReplicaAddressRecreateTimeout {
+			return false, ""
+		}
+		stuck++
+	}
+	if stuck == 0 {
+		return false, ""
+	}
+	return true, fmt.Sprintf("all %d replicas have been in ERR for >%s with no engine endpoint", stuck, staleReplicaAddressRecreateTimeout)
+}
+
 func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 	existingEngine := engine.DeepCopy()
 
@@ -1081,6 +1140,24 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 	}
 	engine.Status.ReplicaModeMap = currentReplicaModeMap
 	engine.Status.ReplicaTransitionTimeMap = currentReplicaTransitionTimeMap
+
+	// shouldRecreateStaleV2Engine needs the owning volume to rule out migration
+	// engines (those never have an endpoint by design). On lookup failure pass
+	// nil so the predicate fails safe and skips the recreation.
+	staleCheckVolume, volErr := m.ds.GetVolumeRO(engine.Spec.VolumeName)
+	if volErr != nil {
+		m.logger.WithError(volErr).Warnf("Failed to get volume %v while evaluating stale v2 engine recreation; skipping recreation", engine.Spec.VolumeName)
+		staleCheckVolume = nil
+	}
+	if recreate, reason := shouldRecreateStaleV2Engine(engine, staleCheckVolume, time.Now()); recreate {
+		m.logger.Warnf("Deleting Engine CR %s to recover from stale replica address: %s", engine.Name, reason)
+		m.eventRecorder.Eventf(engine, corev1.EventTypeWarning, constant.EventReasonFaulted,
+			"Recreating engine due to stale replica addresses: %s", reason)
+		if delErr := m.ds.DeleteEngine(engine.Name); delErr != nil && !apierrors.IsNotFound(delErr) {
+			m.logger.WithError(delErr).Errorf("Failed to delete stuck engine %s", engine.Name)
+		}
+		return nil
+	}
 
 	snapshots, err := engineClientProxy.SnapshotList(engine)
 	if err != nil {
@@ -1234,6 +1311,24 @@ func (m *EngineMonitor) refresh(engine *longhorn.Engine) error {
 					limit, engine.Spec.RebuildConcurrentSyncLimit)
 			}
 		}
+	}
+
+	if engine.Spec.DataEngine == longhorn.DataEngineTypeV2 && !reflect.DeepEqual(engine.Spec.QosLimits, engine.Status.LastAppliedQosLimits) {
+		imClient, err := engineapi.NewInstanceManagerClient(im, false)
+		if err != nil {
+			return errors.Wrap(err, "failed to create instance manager client for v2 QoS update")
+		}
+		defer imClient.Close()
+		if err := imClient.EngineInstanceSetQosLimit(engine, engine.Spec.QosLimits); err != nil {
+			return errors.Wrap(err, "failed to apply v2 QoS limits")
+		}
+		if engine.Spec.QosLimits == nil {
+			engine.Status.LastAppliedQosLimits = nil
+		} else {
+			qosCopy := *engine.Spec.QosLimits
+			engine.Status.LastAppliedQosLimits = &qosCopy
+		}
+		m.logger.Infof("Applied v2 QoS limits %+v", engine.Spec.QosLimits)
 	}
 
 	// TODO: Check if the purge failure is handled somewhere else
@@ -2679,6 +2774,9 @@ func (ec *EngineController) Upgrade(e *longhorn.Engine, log *logrus.Entry) (err 
 	log.Infof("Engine has been upgraded from %v to %v", e.Status.CurrentImage, e.Spec.Image)
 	e.Status.CurrentImage = e.Spec.Image
 	e.Status.CurrentReplicaAddressMap = e.Spec.UpgradedReplicaAddressMap
+	// Clear the transport map: it mirrors the pre-upgrade replicas' per-replica
+	// ports, and a v2 live upgrade must rebuild it for the new replicas.
+	e.Status.CurrentReplicaTransportAddressMap = nil
 	// reset ReplicaModeMap to reflect the new replicas
 	e.Status.ReplicaModeMap = nil
 	e.Status.ReplicaTransitionTimeMap = nil

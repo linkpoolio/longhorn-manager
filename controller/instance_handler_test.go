@@ -392,6 +392,40 @@ func (s *TestSuite) TestReconcileInstanceState(c *C) {
 			newEngine(ExistingInstance, "", TestInstanceManagerName, "", "", 0, false, longhorn.InstanceStateStopping, longhorn.InstanceStateStopped),
 			false,
 		},
+		// 7.1.1.b becoming stopping must clear the v2 transport ports along
+		// with IP/Port, otherwise a later transport-address map build can pick
+		// up stale per-replica ports.
+		"engine becomes stopping clears transport ports": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{
+					ExistingInstance: {
+						Spec: longhorn.InstanceProcessSpec{
+							Name: ExistingInstance,
+						},
+						Status: longhorn.InstanceProcessStatus{
+							State:     longhorn.InstanceStateStopping,
+							PortStart: TestPort1,
+						},
+					},
+				},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			func() *longhorn.Engine {
+				e := newEngine(ExistingInstance, TestEngineImage, TestInstanceManagerName, "", TestIP1, TestPort1, false, longhorn.InstanceStateRunning, longhorn.InstanceStateStopped)
+				e.Status.TcpPort = TestPort1
+				e.Status.RdmaPort = TestPort1 + 1
+				return e
+			}(),
+			newEngine(ExistingInstance, "", TestInstanceManagerName, "", "", 0, false, longhorn.InstanceStateStopping, longhorn.InstanceStateStopped),
+			false,
+		},
 		// 7.1.2. still stopping
 		"engine is still stopping": {
 			longhorn.InstanceTypeEngine,
@@ -454,6 +488,53 @@ func (s *TestSuite) TestReconcileInstanceState(c *C) {
 			false,
 		},
 
+		// stale IM ref heal: the named IM is gone but the resolved IM reports
+		// the instance, so the ref is healed to the resolved IM.
+		"engine stale instance manager ref healed when resolved im owns the instance": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{
+					ExistingInstance: {
+						Spec: longhorn.InstanceProcessSpec{
+							Name: ExistingInstance,
+						},
+						Status: longhorn.InstanceProcessStatus{
+							State:     longhorn.InstanceStateRunning,
+							PortStart: TestPort1,
+						},
+					},
+				},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(ExistingInstance, TestEngineImage, "stale-instance-manager", TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			newEngine(ExistingInstance, TestEngineImage, TestInstanceManagerName, TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			false,
+		},
+		// stale IM ref NOT healed: the resolved IM does not report the
+		// instance, so the stale ref is kept and the normal not-found path
+		// marks the instance error instead of repointing it.
+		"engine stale instance manager ref kept when resolved im does not own the instance": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode1, TestIP1,
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(NonExistingInstance, TestEngineImage, "stale-instance-manager", TestNode1, TestIP1, TestPort1, true, longhorn.InstanceStateRunning, longhorn.InstanceStateRunning),
+			newEngine(NonExistingInstance, "", "stale-instance-manager", TestNode1, "", 0, true, longhorn.InstanceStateError, longhorn.InstanceStateRunning),
+			false,
+		},
 		// corner case1: invalid desireState
 		"engine gets invalid desire state": {
 			longhorn.InstanceTypeEngine,

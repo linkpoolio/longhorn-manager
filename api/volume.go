@@ -219,6 +219,7 @@ func (s *Server) VolumeCreate(rw http.ResponseWriter, req *http.Request) error {
 		ReplicaRebuildingBandwidthLimit: volume.ReplicaRebuildingBandwidthLimit,
 		UblkQueueDepth:                  volume.UblkQueueDepth,
 		UblkNumberOfQueue:               volume.UblkNumberOfQueue,
+		QosLimits:                       volume.QosLimits,
 		BackupCompressionMethod:         volume.BackupCompressionMethod,
 		BackupBlockSize:                 backupBlockSize,
 		UnmapMarkSnapChainRemoved:       volume.UnmapMarkSnapChainRemoved,

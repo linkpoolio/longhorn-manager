@@ -1279,6 +1279,11 @@ spec:
                       type: string
                     targetPort:
                       type: integer
+                    transport:
+                      description: |-
+                        Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                        over, as observed by the instance manager.
+                      type: string
                   type: object
                 type: array
               port:
@@ -1286,6 +1291,11 @@ spec:
               preferredPath:
                 description: PreferredPath is the preferred frontend path address.
                 type: string
+              rdmaPort:
+                description: |-
+                  RdmaPort is the replica's RDMA NVMe-oF listener port. Zero when the
+                  storage node has no RDMA capability or on v1 replicas.
+                type: integer
               salvageExecuted:
                 type: boolean
               started:
@@ -1305,6 +1315,13 @@ spec:
               targetPort:
                 description: TargetPort is the currently connected port of the v2
                   engine target
+                type: integer
+              tcpPort:
+                description: |-
+                  TcpPort is the replica's TCP NVMe-oF listener port. Equals Port on
+                  TCP-only storage nodes; equals Port+1 on storage nodes that also
+                  expose RDMA. Zero on v1 data engine or pre-dual-listener replicas;
+                  engine_controller falls back to Port in that case.
                 type: integer
               ublkID:
                 format: int32
@@ -1561,6 +1578,29 @@ spec:
                 type: boolean
               nodeID:
                 type: string
+              qosLimits:
+                description: |-
+                  QosLimits caps aggregate raid bdev I/O for v2 engines via SPDK's
+                  bdev_set_qos_limit. Propagated by the volume controller from
+                  VolumeSpec.QosLimits. nil / all-zero means unlimited.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               rebuildConcurrentSyncLimit:
                 description: |-
                   RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run
@@ -1572,6 +1612,28 @@ spec:
               replicaAddressMap:
                 additionalProperties:
                   type: string
+                type: object
+              replicaTransportAddressMap:
+                additionalProperties:
+                  description: |-
+                    ReplicaTransportAddresses carries both transport-qualified NVMe-oF addresses
+                    for a single replica so the engine can pick whichever transport matches its
+                    own negotiated node transport at attach time. TcpAddress is always populated
+                    on dual-listener-aware replicas; RdmaAddress is empty on TCP-only storage
+                    nodes.
+                  properties:
+                    rdmaAddress:
+                      type: string
+                    tcpAddress:
+                      type: string
+                  type: object
+                description: |-
+                  ReplicaTransportAddressMap carries transport-qualified addresses per
+                  replica so the engine picks the transport matching its own node
+                  transport (RDMA when supported, TCP otherwise) at attach time. Keyed by
+                  replica name with both tcp_address and (optionally) rdma_address per
+                  entry. Optional; when empty the engine falls back to the legacy
+                  replica_address_map with its own replicaTransport.
                 type: object
               requestedBackupRestore:
                 type: string
@@ -1681,6 +1743,28 @@ spec:
                   type: string
                 nullable: true
                 type: object
+              currentReplicaTransportAddressMap:
+                additionalProperties:
+                  description: |-
+                    ReplicaTransportAddresses carries both transport-qualified NVMe-oF addresses
+                    for a single replica so the engine can pick whichever transport matches its
+                    own negotiated node transport at attach time. TcpAddress is always populated
+                    on dual-listener-aware replicas; RdmaAddress is empty on TCP-only storage
+                    nodes.
+                  properties:
+                    rdmaAddress:
+                      type: string
+                    tcpAddress:
+                      type: string
+                  type: object
+                description: |-
+                  CurrentReplicaTransportAddressMap is the transport-aware mirror of
+                  CurrentReplicaAddressMap. Synced from Spec.ReplicaTransportAddressMap
+                  and consumed by engineapi when creating the engine instance, so the
+                  engine can pick the transport matching its own node transport at
+                  attach time.
+                nullable: true
+                type: object
               currentSize:
                 format: int64
                 type: string
@@ -1694,6 +1778,29 @@ spec:
                 type: string
               isExpanding:
                 type: boolean
+              lastAppliedQosLimits:
+                description: |-
+                  LastAppliedQosLimits records the QosLimits last pushed to the v2 engine
+                  instance via SPDK bdev_set_qos_limit. Compared against Spec.QosLimits in
+                  the engine controller to drive live updates without recreating the engine.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               lastExpansionError:
                 type: string
               lastExpansionFailedAt:
@@ -1720,6 +1827,11 @@ spec:
                   type: object
                 nullable: true
                 type: object
+              rdmaPort:
+                description: |-
+                  RdmaPort is the replica's RDMA NVMe-oF listener port. Zero when the
+                  storage node has no RDMA capability or on v1 replicas.
+                type: integer
               rebuildConcurrentSyncLimit:
                 description: |-
                   RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run
@@ -1830,6 +1942,13 @@ spec:
                 type: boolean
               storageIP:
                 type: string
+              tcpPort:
+                description: |-
+                  TcpPort is the replica's TCP NVMe-oF listener port. Equals Port on
+                  TCP-only storage nodes; equals Port+1 on storage nodes that also
+                  expose RDMA. Zero on v1 data engine or pre-dual-listener replicas;
+                  engine_controller falls back to Port in that case.
+                type: integer
               ublkID:
                 format: int32
                 type: integer
@@ -2052,6 +2171,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:
@@ -2062,6 +2186,9 @@ spec:
                           type: integer
                         preferredPath:
                           type: string
+                        rdmaPort:
+                          format: int32
+                          type: integer
                         resourceVersion:
                           format: int64
                           type: integer
@@ -2071,6 +2198,9 @@ spec:
                           format: int32
                           type: integer
                         targetPortStart:
+                          format: int32
+                          type: integer
+                        tcpPort:
                           format: int32
                           type: integer
                         type:
@@ -2126,6 +2256,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:
@@ -2136,6 +2271,9 @@ spec:
                           type: integer
                         preferredPath:
                           type: string
+                        rdmaPort:
+                          format: int32
+                          type: integer
                         resourceVersion:
                           format: int64
                           type: integer
@@ -2145,6 +2283,9 @@ spec:
                           format: int32
                           type: integer
                         targetPortStart:
+                          format: int32
+                          type: integer
+                        tcpPort:
                           format: int32
                           type: integer
                         type:
@@ -2200,6 +2341,11 @@ spec:
                                 type: string
                               targetPort:
                                 type: integer
+                              transport:
+                                description: |-
+                                  Transport is the NVMe-oF transport (tcp or rdma) this path is attached
+                                  over, as observed by the instance manager.
+                                type: string
                             type: object
                           type: array
                         portEnd:
@@ -2210,6 +2356,9 @@ spec:
                           type: integer
                         preferredPath:
                           type: string
+                        rdmaPort:
+                          format: int32
+                          type: integer
                         resourceVersion:
                           format: int64
                           type: integer
@@ -2219,6 +2368,9 @@ spec:
                           format: int32
                           type: integer
                         targetPortStart:
+                          format: int32
+                          type: integer
+                        tcpPort:
                           format: int32
                           type: integer
                         type:
@@ -2992,6 +3144,11 @@ spec:
                 type: string
               port:
                 type: integer
+              rdmaPort:
+                description: |-
+                  RdmaPort is the replica's RDMA NVMe-oF listener port. Zero when the
+                  storage node has no RDMA capability or on v1 replicas.
+                type: integer
               salvageExecuted:
                 type: boolean
               started:
@@ -3000,6 +3157,13 @@ spec:
                 type: boolean
               storageIP:
                 type: string
+              tcpPort:
+                description: |-
+                  TcpPort is the replica's TCP NVMe-oF listener port. Equals Port on
+                  TCP-only storage nodes; equals Port+1 on storage nodes that also
+                  expose RDMA. Zero on v1 data engine or pre-dual-listener replicas;
+                  engine_controller falls back to Port in that case.
+                type: integer
               ublkID:
                 format: int32
                 type: integer
@@ -4026,6 +4190,32 @@ spec:
                 - disabled
                 - enabled
                 type: string
+              qosLimits:
+                description: |-
+                  QosLimits caps aggregate raid bdev I/O for v2 volumes via SPDK's
+                  bdev_set_qos_limit on the engine's raid bdev. Mapped 1:1 to SPDK
+                  parameters. All-zero (or nil) means unlimited (the default). Rebuild
+                  traffic — which goes engine→replica directly via NVMe-oF rather than
+                  through the raid bdev — is not subject to this cap.
+                  Currently v2 only; v1 ignores QosLimits.
+                properties:
+                  rMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwIOsPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rwMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  wMBPerSec:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               rebuildConcurrentSyncLimit:
                 description: |-
                   RebuildConcurrentSyncLimit controls the maximum number of file synchronization operations that can run

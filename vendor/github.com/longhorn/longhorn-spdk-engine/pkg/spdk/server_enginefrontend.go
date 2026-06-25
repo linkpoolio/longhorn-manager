@@ -195,7 +195,7 @@ func (s *Server) EngineFrontendReplicaAdd(ctx context.Context, req *spdkrpc.Engi
 	efAddress := net.JoinHostPort(localIP, strconv.Itoa(types.SPDKServicePort))
 
 	// Create a gRPC client to the (potentially remote) Engine node.
-	engineClient, err := s.newServiceClient(engineServiceAddress)
+	engineClient, err := GetServiceClient(engineServiceAddress)
 	if err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to get SPDK client for engine %s at %s: %v", engineName, engineServiceAddress, err)
 	}
@@ -298,8 +298,16 @@ func (s *Server) EngineFrontendCreate(ctx context.Context, req *spdkrpc.EngineFr
 	}
 
 	ef := NewEngineFrontend(req.Name, req.EngineName, req.VolumeName, req.Frontend, req.SpecSize,
-		req.UblkQueueDepth, req.UblkNumberOfQueue, s.updateChs[types.InstanceTypeEngineFrontend], s.newServiceClient)
+		req.UblkQueueDepth, req.UblkNumberOfQueue, s.updateChs[types.InstanceTypeEngineFrontend])
 	ef.metadataDir = s.metadataDir
+	// Tag the frontend with the engine target's actual transport (TCP — the
+	// kernel initiator dials nvme-tcp), NOT the node's negotiated transport:
+	// on RDMA nodes the latter would tag the path RDMA even though the target
+	// it dials is TCP, making the switchover RDMA teardown force-disconnect a
+	// TCP controller that ctrl-loss-tmo must reclaim instead. The teardown
+	// additionally keys on the transport observed on the live controller, so
+	// a legacy RDMA target still gets the explicit RDMA teardown.
+	ef.NvmeTcpFrontend.Transport = engineFrontendTargetTransport()
 
 	s.Unlock()
 

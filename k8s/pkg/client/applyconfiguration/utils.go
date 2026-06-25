@@ -156,6 +156,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &longhornv1beta2.OrphanStatusApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("PurgeStatus"):
 		return &longhornv1beta2.PurgeStatusApplyConfiguration{}
+	case v1beta2.SchemeGroupVersion.WithKind("QosLimits"):
+		return &longhornv1beta2.QosLimitsApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("RebuildStatus"):
 		return &longhornv1beta2.RebuildStatusApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("RecurringJob"):
@@ -168,6 +170,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &longhornv1beta2.ReplicaApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("ReplicaSpec"):
 		return &longhornv1beta2.ReplicaSpecApplyConfiguration{}
+	case v1beta2.SchemeGroupVersion.WithKind("ReplicaTransportAddresses"):
+		return &longhornv1beta2.ReplicaTransportAddressesApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("RestoreStatus"):
 		return &longhornv1beta2.RestoreStatusApplyConfiguration{}
 	case v1beta2.SchemeGroupVersion.WithKind("Setting"):

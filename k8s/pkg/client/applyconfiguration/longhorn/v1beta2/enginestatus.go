@@ -27,9 +27,15 @@ import (
 //
 // EngineStatus defines the observed state of the Longhorn engine
 type EngineStatusApplyConfiguration struct {
-	CurrentSize              *int64                                 `json:"currentSize,omitempty"`
-	CurrentReplicaAddressMap map[string]string                      `json:"currentReplicaAddressMap,omitempty"`
-	ReplicaModeMap           map[string]longhornv1beta2.ReplicaMode `json:"replicaModeMap,omitempty"`
+	CurrentSize              *int64            `json:"currentSize,omitempty"`
+	CurrentReplicaAddressMap map[string]string `json:"currentReplicaAddressMap,omitempty"`
+	// CurrentReplicaTransportAddressMap is the transport-aware mirror of
+	// CurrentReplicaAddressMap. Synced from Spec.ReplicaTransportAddressMap
+	// and consumed by engineapi when creating the engine instance, so the
+	// engine can pick the transport matching its own node transport at
+	// attach time.
+	CurrentReplicaTransportAddressMap map[string]ReplicaTransportAddressesApplyConfiguration `json:"currentReplicaTransportAddressMap,omitempty"`
+	ReplicaModeMap                    map[string]longhornv1beta2.ReplicaMode                 `json:"replicaModeMap,omitempty"`
 	// ReplicaTransitionTimeMap records the time a replica in ReplicaModeMap transitions from one mode to another (or
 	// from not being in the ReplicaModeMap to being in it). This information is sometimes required by other controllers
 	// (e.g. the volume controller uses it to determine the correct value for replica.Spec.lastHealthyAt).
@@ -53,6 +59,10 @@ type EngineStatusApplyConfiguration struct {
 	// concurrently during a single replica rebuild.
 	// It is determined by the global setting or the volume spec field with the same name.
 	RebuildConcurrentSyncLimit *int `json:"rebuildConcurrentSyncLimit,omitempty"`
+	// LastAppliedQosLimits records the QosLimits last pushed to the v2 engine
+	// instance via SPDK bdev_set_qos_limit. Compared against Spec.QosLimits in
+	// the engine controller to drive live updates without recreating the engine.
+	LastAppliedQosLimits *QosLimitsApplyConfiguration `json:"lastAppliedQosLimits,omitempty"`
 }
 
 // EngineStatusApplyConfiguration constructs a declarative configuration of the EngineStatus type for use with
@@ -79,6 +89,20 @@ func (b *EngineStatusApplyConfiguration) WithCurrentReplicaAddressMap(entries ma
 	}
 	for k, v := range entries {
 		b.CurrentReplicaAddressMap[k] = v
+	}
+	return b
+}
+
+// WithCurrentReplicaTransportAddressMap puts the entries into the CurrentReplicaTransportAddressMap field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, the entries provided by each call will be put on the CurrentReplicaTransportAddressMap field,
+// overwriting an existing map entries in CurrentReplicaTransportAddressMap field with the same key.
+func (b *EngineStatusApplyConfiguration) WithCurrentReplicaTransportAddressMap(entries map[string]ReplicaTransportAddressesApplyConfiguration) *EngineStatusApplyConfiguration {
+	if b.CurrentReplicaTransportAddressMap == nil && len(entries) > 0 {
+		b.CurrentReplicaTransportAddressMap = make(map[string]ReplicaTransportAddressesApplyConfiguration, len(entries))
+	}
+	for k, v := range entries {
+		b.CurrentReplicaTransportAddressMap[k] = v
 	}
 	return b
 }
@@ -272,5 +296,13 @@ func (b *EngineStatusApplyConfiguration) WithSnapshotMaxSize(value int64) *Engin
 // If called multiple times, the RebuildConcurrentSyncLimit field is set to the value of the last call.
 func (b *EngineStatusApplyConfiguration) WithRebuildConcurrentSyncLimit(value int) *EngineStatusApplyConfiguration {
 	b.RebuildConcurrentSyncLimit = &value
+	return b
+}
+
+// WithLastAppliedQosLimits sets the LastAppliedQosLimits field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the LastAppliedQosLimits field is set to the value of the last call.
+func (b *EngineStatusApplyConfiguration) WithLastAppliedQosLimits(value *QosLimitsApplyConfiguration) *EngineStatusApplyConfiguration {
+	b.LastAppliedQosLimits = value
 	return b
 }
