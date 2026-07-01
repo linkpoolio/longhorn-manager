@@ -71,6 +71,11 @@ var (
 	sizeUpdateBurst = 3
 
 	staleReplicaAddressRecreateTimeout = 2 * time.Minute
+
+	// consecutive "cannot find engine" refreshes before the monitor treats a
+	// running v2 engine as a phantom instance and deletes its stale record
+	// from the instance manager.
+	engineInstanceNotFoundMaxCount = 3
 )
 
 const (
@@ -134,6 +139,10 @@ type EngineMonitor struct {
 	restoringCounterMutex    *sync.Mutex
 
 	sizeUpdateLimiter *rate.Limiter
+
+	// consecutive refreshes where the data plane reported the engine itself
+	// as missing while the CR still claims it is running.
+	instanceNotFoundCount int
 
 	snapshotConcurrentLimiter *SnapshotConcurrentLimiter
 }
@@ -998,6 +1007,7 @@ func (m *EngineMonitor) sync() bool {
 		}
 
 		if err := m.refresh(engine); err == nil || !apierrors.IsConflict(errors.Cause(err)) {
+			m.handlePhantomEngine(engine, err)
 			utilruntime.HandleError(errors.Wrapf(err, "failed to update status for engine %v", m.Name))
 			break
 		}
@@ -1005,6 +1015,67 @@ func (m *EngineMonitor) sync() bool {
 	}
 
 	return false
+}
+
+// isEngineDataPlaneNotFound reports whether a monitor refresh failed because
+// the v2 data plane no longer has the engine itself (as opposed to a
+// transient error or a missing sub-resource such as a backup or snapshot).
+func isEngineDataPlaneNotFound(engine *longhorn.Engine, err error) bool {
+	return err != nil && types.IsDataEngineV2(engine.Spec.DataEngine) &&
+		strings.Contains(err.Error(), fmt.Sprintf("cannot find engine %v", engine.Name))
+}
+
+// handlePhantomEngine detects a v2 engine whose CR says running while the
+// SPDK data plane no longer has the engine: every proxy call fails with
+// "cannot find engine <name>". The instance manager can keep listing such an
+// instance from persisted records after a failed recovery, so the instance
+// handler never transitions the CR out of running and the monitor errors
+// forever. Deleting the phantom instance record from the instance manager
+// makes it disappear from the instance map, which lets the normal
+// instance-absent handling stop and recreate the engine.
+func (m *EngineMonitor) handlePhantomEngine(engine *longhorn.Engine, refreshErr error) {
+	if !isEngineDataPlaneNotFound(engine, refreshErr) {
+		m.instanceNotFoundCount = 0
+		return
+	}
+
+	m.instanceNotFoundCount++
+	if m.instanceNotFoundCount < engineInstanceNotFoundMaxCount {
+		return
+	}
+	m.instanceNotFoundCount = 0
+
+	if engine.Status.InstanceManagerName == "" {
+		return
+	}
+	im, err := m.ds.GetInstanceManagerRO(engine.Status.InstanceManagerName)
+	if err != nil {
+		m.logger.WithError(err).Warnf("Failed to get instance manager %v while handling phantom engine", engine.Status.InstanceManagerName)
+		return
+	}
+	if im.Status.CurrentState != longhorn.InstanceManagerStateRunning {
+		return
+	}
+
+	m.logger.Warnf("Engine %v is a phantom instance: the CR and instance manager %v report it running but the data plane cannot find it after %v checks; deleting the stale instance record to trigger recreation",
+		engine.Name, im.Name, engineInstanceNotFoundMaxCount)
+	m.eventRecorder.Eventf(engine, corev1.EventTypeWarning, constant.EventReasonStaleInstance,
+		"Deleting stale instance record: instance manager reports the engine running but the data plane cannot find it")
+
+	c, err := engineapi.NewInstanceManagerClient(im, true)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to create instance manager client while handling phantom engine")
+		return
+	}
+	defer func(c io.Closer) {
+		if closeErr := c.Close(); closeErr != nil {
+			m.logger.WithError(closeErr).Warn("Failed to close instance manager client")
+		}
+	}(c)
+
+	if err := c.InstanceDelete(engine.Spec.DataEngine, engine.Name, "", string(longhorn.InstanceManagerTypeEngine), "", true); err != nil && !types.ErrorIsNotFound(err) {
+		m.logger.WithError(err).Warnf("Failed to delete phantom engine instance %v from instance manager %v", engine.Name, im.Name)
+	}
 }
 
 func shouldRecreateStaleV2Engine(engine *longhorn.Engine, volume *longhorn.Volume, now time.Time) (bool, string) {

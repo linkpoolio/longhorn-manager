@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"io"
 	"strconv"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/longhorn/longhorn-manager/util"
 
 	longhorn "github.com/longhorn/longhorn-manager/k8s/pkg/apis/longhorn/v1beta2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // mockEngineClientProxy wraps EngineSimulator and overrides ReplicaRebuildVerify for test control.
@@ -284,6 +286,67 @@ func TestVerifyCompletedRebuild(t *testing.T) {
 
 			newMonitor().verifyCompletedRebuild(engine, tc.addressReplicaMap, tc.rebuildStatus, proxy)
 			assert.ElementsMatch(tc.expectVerified, proxy.verifyCalled, "ReplicaRebuildVerify call mismatch")
+		})
+	}
+}
+
+func TestIsEngineDataPlaneNotFound(t *testing.T) {
+	v2Engine := &longhorn.Engine{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-x-e-0"},
+		Spec: longhorn.EngineSpec{
+			InstanceSpec: longhorn.InstanceSpec{DataEngine: longhorn.DataEngineTypeV2},
+		},
+	}
+	v1Engine := &longhorn.Engine{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-x-e-0"},
+		Spec: longhorn.EngineSpec{
+			InstanceSpec: longhorn.InstanceSpec{DataEngine: longhorn.DataEngineTypeV1},
+		},
+	}
+
+	testCases := []struct {
+		name     string
+		engine   *longhorn.Engine
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			engine:   v2Engine,
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "v2 engine not found in data plane",
+			engine:   v2Engine,
+			err:      fmt.Errorf("failed to get volume: rpc error: code = NotFound desc = cannot find engine pvc-x-e-0"),
+			expected: true,
+		},
+		{
+			name:     "v1 engine ignored",
+			engine:   v1Engine,
+			err:      fmt.Errorf("cannot find engine pvc-x-e-0"),
+			expected: false,
+		},
+		{
+			name:     "missing sub-resource is not a phantom engine",
+			engine:   v2Engine,
+			err:      fmt.Errorf("cannot find backup backup-1 status in longhorn engine"),
+			expected: false,
+		},
+		{
+			name:     "different engine name ignored",
+			engine:   v2Engine,
+			err:      fmt.Errorf("cannot find engine pvc-y-e-0"),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isEngineDataPlaneNotFound(tc.engine, tc.err); got != tc.expected {
+				t.Errorf("isEngineDataPlaneNotFound() = %v, expected %v", got, tc.expected)
+			}
 		})
 	}
 }
