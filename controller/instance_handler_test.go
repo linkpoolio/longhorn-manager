@@ -682,6 +682,25 @@ func (s *TestSuite) TestReconcileInstanceState(c *C) {
 			newEngine(NonExistingInstance, "", "", "", "", 0, false, longhorn.InstanceStateStopped, longhorn.InstanceStateStopped),
 			false,
 		},
+		// corner case8: the instance status still references an IM on another
+		// node after a failover; the reference must be released so the
+		// instance can be recreated on the IM of its scheduled node.
+		"engine releases stale instance manager on another node": {
+			longhorn.InstanceTypeEngine,
+			newInstanceManager(
+				TestInstanceManagerName, longhorn.InstanceManagerStateRunning,
+				TestOwnerID1, TestNode2, TestIP1,
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				map[string]longhorn.InstanceProcess{},
+				longhorn.DataEngineTypeV1,
+				TestInstanceManagerImage,
+				false,
+			),
+			newEngine(NonExistingInstance, "", TestInstanceManagerName, TestNode1, "", 0, false, longhorn.InstanceStateError, longhorn.InstanceStateRunning),
+			newEngine(NonExistingInstance, "", "", TestNode1, "", 0, false, longhorn.InstanceStateStopped, longhorn.InstanceStateRunning),
+			false,
+		},
 	}
 	for name, tc := range testCases {
 		fmt.Printf("testing instance handler: %v\n", name)

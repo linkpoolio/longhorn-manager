@@ -428,6 +428,35 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 		}
 	}
 
+	// An instance scheduled to a node must not stay chained to an instance
+	// manager on a different node. After a failover the status can keep
+	// referencing the previous node's IM; every downstream call (create,
+	// delete, log) then targets the wrong IM, and because reconcile errors
+	// skip the status update, the instance wedges there until the reference
+	// is cleared by hand. Release the reference once the referenced IM no
+	// longer runs the instance, so the next pass resolves the IM of the
+	// scheduled node. A Started instance is left alone: it may still own a
+	// data-plane process on that IM, which syncStatusWithInstanceManager
+	// transitions through error/stopped first.
+	if im != nil && spec.NodeID != "" && im.Spec.NodeID != spec.NodeID && !status.Started {
+		ownedByStaleIM := false
+		if im.Status.CurrentState == longhorn.InstanceManagerStateRunning {
+			imInstances, err := h.getInstancesFromInstanceManager(runtimeObj, im)
+			if err != nil {
+				return err
+			}
+			if instance, exists := imInstances[instanceName]; exists && instance.Status.State != longhorn.InstanceStateStopped {
+				ownedByStaleIM = true
+			}
+		}
+		if !ownedByStaleIM {
+			log.Warnf("Releasing stale instance manager %v on node %v for instance %v scheduled to node %v",
+				im.Name, im.Spec.NodeID, instanceName, spec.NodeID)
+			status.InstanceManagerName = ""
+			im = nil
+		}
+	}
+
 	if spec.LogRequested {
 		if !status.LogFetched {
 			// No need to get the log for instance manager if the data engine is not "longhorn"
