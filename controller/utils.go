@@ -130,6 +130,28 @@ func createOrUpdateAttachmentTicket(va *longhorn.VolumeAttachment, ticketID, nod
 	va.Spec.AttachmentTickets[attachmentTicket.ID] = attachmentTicket
 }
 
+// persistStatusObservedByErroredSync persists a sync's status mutations even
+// when the sync itself errored. Status mutations are observations of
+// authoritative instance-manager state plus deterministic state-machine
+// transitions; discarding them on error strands completed work — a create RPC
+// that timed out client-side may have completed server-side, and dropping the
+// observed running state leaves the CR stopped until a later clean pass. The
+// original sync error still returns to the workqueue so the failed action
+// itself is retried with backoff; an update failure is surfaced through err
+// only when it would otherwise be lost.
+func persistStatusObservedByErroredSync(changed bool, update func() error, err *error, logger logrus.FieldLogger, kind string) {
+	if !changed {
+		return
+	}
+	if updateErr := update(); updateErr != nil {
+		if *err == nil {
+			*err = updateErr
+		} else {
+			logger.WithError(updateErr).Warnf("Failed to persist %s status observed by an errored sync", kind)
+		}
+	}
+}
+
 func handleReconcileErrorLogging(logger logrus.FieldLogger, err error, mesg string) {
 	if types.ErrorIsInvalidState(err) {
 		logger.WithError(err).Trace(mesg)
