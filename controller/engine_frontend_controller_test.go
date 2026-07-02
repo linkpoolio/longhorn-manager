@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"context"
 	"errors"
 	"strings"
@@ -807,4 +808,143 @@ func (s *TestSuite) TestRecordEngineFrontendSwitchoverFailureEvent(c *C) {
 			c.Fatalf("case=%s expected one recorded event", tc.name)
 		}
 	}
+}
+
+// A sync that errors after observing authoritative instance-manager state
+// must still persist what it observed: a create RPC that times out
+// client-side can complete server-side, and discarding the observed status
+// strands the running instance behind the retry queue (2026-07-02: twelve
+// frontends sat running on the IM while their CRs read stopped).
+func (s *TestSuite) TestSyncEngineFrontendPersistsStatusWhenSyncErrors(c *C) {
+	datastore.SkipListerCheck = true
+
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, 0)
+
+	efc, err := newTestEngineFrontendController(lhClient, kubeClient, extensionsClient, informerFactories, TestOwnerID1)
+	c.Assert(err, IsNil)
+	efc.eventRecorder = record.NewFakeRecorder(10)
+
+	// The stale-instance deletion is the deterministic error injection
+	// point: it runs after ReconcileInstanceState has already synced the
+	// observed instance state into the CR status.
+	efc.deleteInstanceHandler = func(obj interface{}) error {
+		return fmt.Errorf("injected delete failure")
+	}
+
+	settingIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer()
+	volumeIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().Volumes().Informer().GetIndexer()
+	efIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().EngineFrontends().Informer().GetIndexer()
+	imIndexer := informerFactories.LhInformerFactory.Longhorn().V1beta2().InstanceManagers().Informer().GetIndexer()
+	kubeNodeIndexer := informerFactories.KubeInformerFactory.Core().V1().Nodes().Informer().GetIndexer()
+	podIndexer := informerFactories.KubeNamespaceFilteredInformerFactory.Core().V1().Pods().Informer().GetIndexer()
+
+	for _, setting := range []*longhorn.Setting{
+		newSetting(string(types.SettingNameDefaultEngineImage), TestEngineImage),
+		newSetting(string(types.SettingNameV2DataEngine), "true"),
+	} {
+		createdSetting, err := lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), setting, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+		c.Assert(settingIndexer.Add(createdSetting), IsNil)
+	}
+
+	volume := newVolume(TestVolumeName, 1)
+	volume.Spec.DataEngine = longhorn.DataEngineTypeV2
+	volume.Spec.Frontend = longhorn.VolumeFrontendBlockDev
+	volume.Status.CurrentImage = TestEngineImage
+	createdVolume, err := lhClient.LonghornV1beta2().Volumes(TestNamespace).Create(context.TODO(), volume, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(volumeIndexer.Add(createdVolume), IsNil)
+
+	kubeNode := newKubernetesNode(TestOwnerID1, corev1.ConditionTrue, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionFalse, corev1.ConditionTrue)
+	createdKubeNode, err := kubeClient.CoreV1().Nodes().Create(context.TODO(), kubeNode, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(kubeNodeIndexer.Add(createdKubeNode), IsNil)
+
+	imPod := newPod(&corev1.PodStatus{Phase: corev1.PodRunning, PodIP: TestIP1}, TestInstanceManagerName, TestNamespace, TestOwnerID1)
+	createdPod, err := kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), imPod, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(podIndexer.Add(createdPod), IsNil)
+	// The instance handler resolves the IM pod through the unfiltered
+	// informer; register there as well.
+	unfilteredPodIndexer := informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer()
+	c.Assert(unfilteredPodIndexer.Add(createdPod), IsNil)
+
+	ef := &longhorn.EngineFrontend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "persist-on-error-ef",
+			Namespace: TestNamespace,
+		},
+		Spec: longhorn.EngineFrontendSpec{
+			InstanceSpec: longhorn.InstanceSpec{
+				VolumeName:  volume.Name,
+				VolumeSize:  volume.Spec.Size,
+				NodeID:      TestOwnerID1,
+				Image:       TestEngineImage,
+				DesireState: longhorn.InstanceStateRunning,
+				DataEngine:  longhorn.DataEngineTypeV2,
+			},
+			Frontend:   longhorn.VolumeFrontendBlockDev,
+			EngineName: "test-engine",
+			TargetIP:   TestIP2,
+			TargetPort: TestPort1,
+		},
+		Status: longhorn.EngineFrontendStatus{
+			InstanceStatus: longhorn.InstanceStatus{
+				OwnerID:             TestOwnerID1,
+				InstanceManagerName: TestInstanceManagerName,
+				CurrentState:        longhorn.InstanceStateRunning,
+				Started:             true,
+				// Port intentionally unset: the reconcile observes it from
+				// the instance-manager map; persisting that observation
+				// despite the injected error is what this test pins.
+			},
+		},
+	}
+
+	instanceManager := newInstanceManager(
+		TestInstanceManagerName,
+		longhorn.InstanceManagerStateRunning,
+		TestOwnerID1,
+		TestOwnerID1,
+		TestIP1,
+		nil,
+		map[string]longhorn.InstanceProcess{
+			ef.Name: {
+				Spec: longhorn.InstanceProcessSpec{
+					Name:       ef.Name,
+					DataEngine: longhorn.DataEngineTypeV2,
+				},
+				Status: longhorn.InstanceProcessStatus{
+					State:     longhorn.InstanceStateRunning,
+					Frontend:  "",
+					PortStart: int32(TestPort1),
+					UUID:      "test-uuid",
+				},
+			},
+		},
+		nil,
+		longhorn.DataEngineTypeV2,
+		TestInstanceManagerImage,
+		false,
+	)
+	createdIM, err := lhClient.LonghornV1beta2().InstanceManagers(TestNamespace).Create(context.TODO(), instanceManager, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(imIndexer.Add(createdIM), IsNil)
+
+	createdEF, err := lhClient.LonghornV1beta2().EngineFrontends(TestNamespace).Create(context.TODO(), ef, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(efIndexer.Add(createdEF), IsNil)
+
+	err = efc.syncEngineFrontend(TestNamespace + "/" + ef.Name)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "injected delete failure"), Equals, true)
+
+	updatedEF, err := lhClient.LonghornV1beta2().EngineFrontends(TestNamespace).Get(context.TODO(), ef.Name, metav1.GetOptions{})
+	c.Assert(err, IsNil)
+	// The observation made before the error must have been persisted.
+	c.Assert(updatedEF.Status.Port, Equals, int(TestPort1))
+	c.Assert(updatedEF.Status.UUID, Equals, "test-uuid")
 }

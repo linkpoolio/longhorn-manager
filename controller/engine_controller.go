@@ -334,9 +334,18 @@ func (ec *EngineController) syncEngine(key string) (err error) {
 
 	existingEngine := engine.DeepCopy()
 	defer func() {
-		// we're going to update engine assume things changes
-		if err == nil && !reflect.DeepEqual(existingEngine.Status, engine.Status) {
-			_, err = ec.ds.UpdateEngineStatus(engine)
+		// Persist observed status even when the sync errored (see the
+		// engine frontend controller's sync defer for the full rationale:
+		// discarding observations of authoritative IM state on error
+		// strands completed work behind the retry queue).
+		if !reflect.DeepEqual(existingEngine.Status, engine.Status) {
+			if _, updateErr := ec.ds.UpdateEngineStatus(engine); updateErr != nil {
+				if err == nil {
+					err = updateErr
+				} else {
+					log.WithError(updateErr).Warn("Failed to persist engine status observed by an errored sync")
+				}
+			}
 		}
 		// requeue if it's conflict
 		if apierrors.IsConflict(errors.Cause(err)) {

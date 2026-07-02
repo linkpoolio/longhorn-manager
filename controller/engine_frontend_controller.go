@@ -358,8 +358,22 @@ func (efc *EngineFrontendController) syncEngineFrontend(key string) (err error) 
 
 	existingEF := ef.DeepCopy()
 	defer func() {
-		if err == nil && !reflect.DeepEqual(existingEF.Status, ef.Status) {
-			_, err = efc.ds.UpdateEngineFrontendStatus(ef)
+		// Persist observed status even when the sync errored. The status
+		// mutations are observations of authoritative instance-manager state
+		// plus deterministic state-machine transitions; discarding them on
+		// error strands completed work — a create RPC that timed out
+		// client-side may have completed server-side, and dropping the
+		// observed running state leaves the CR stopped until a later clean
+		// pass. The error still returns to the workqueue so the failed
+		// action itself is retried with backoff.
+		if !reflect.DeepEqual(existingEF.Status, ef.Status) {
+			if _, updateErr := efc.ds.UpdateEngineFrontendStatus(ef); updateErr != nil {
+				if err == nil {
+					err = updateErr
+				} else {
+					log.WithError(updateErr).Warn("Failed to persist engine frontend status observed by an errored sync")
+				}
+			}
 		}
 		if apierrors.IsConflict(errors.Cause(err)) {
 			log.WithError(err).Debug("Requeue engine frontend due to conflict")
