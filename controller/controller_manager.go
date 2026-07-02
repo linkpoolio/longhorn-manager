@@ -323,6 +323,16 @@ func EnhancedDefaultControllerRateLimiter() workqueue.TypedRateLimiter[any] {
 	)
 }
 
+// CappedControllerRateLimiter is EnhancedDefaultControllerRateLimiter with
+// the exponential per-item backoff capped at maxBackoff.
+func CappedControllerRateLimiter(maxBackoff time.Duration) workqueue.TypedRateLimiter[any] {
+	return workqueue.NewTypedMaxOfRateLimiter[any](
+		workqueue.NewTypedItemExponentialFailureRateLimiter[any](5*time.Millisecond, maxBackoff),
+		// 100 qps, 1000 bucket size
+		&workqueue.TypedBucketRateLimiter[any]{Limiter: rate.NewLimiter(rate.Limit(100), 1000)},
+	)
+}
+
 // IsSameGuaranteedCPURequirement returns true if the resource requirement a is equal to the resource requirement b
 func IsSameGuaranteedCPURequirement(a, b *corev1.ResourceRequirements) bool {
 	var aQ, bQ resource.Quantity

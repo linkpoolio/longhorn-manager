@@ -164,7 +164,7 @@ func NewEngineController(
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: v1core.New(kubeClient.CoreV1().RESTClient()).Events("")})
 
 	ec := &EngineController{
-		baseController: newBaseController("longhorn-engine", logger),
+		baseController: newBaseControllerWithCappedBackoff("longhorn-engine", logger, time.Minute),
 
 		ds:        ds,
 		namespace: namespace,
