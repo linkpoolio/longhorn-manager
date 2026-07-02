@@ -6,6 +6,13 @@ import (
 
 const (
 	GRPCServiceTimeout = 3 * time.Minute
+	// GRPCServiceMutateTimeout bounds instance create/delete calls. Under a
+	// node-wide recovery storm a single v2 instance creation legitimately
+	// spends minutes in kernel-side retries (nvme connect, udev settle, dm
+	// validation); a shorter deadline aborts the client while the server
+	// completes the work anyway, poisoning the caller's state machine with
+	// spurious errors.
+	GRPCServiceMutateTimeout = 6 * time.Minute
 
 	ProcessStateRunning  = "running"
 	ProcessStateStarting = "starting"

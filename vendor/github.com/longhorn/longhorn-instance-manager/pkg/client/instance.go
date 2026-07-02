@@ -156,7 +156,7 @@ func (c *InstanceServiceClient) InstanceCreate(req *InstanceCreateRequest) (*api
 	}
 
 	client := c.getControllerServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), types.GRPCServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), types.GRPCServiceMutateTimeout)
 	defer cancel()
 
 	var processInstanceSpec *rpc.ProcessInstanceSpec
@@ -249,7 +249,7 @@ func (c *InstanceServiceClient) InstanceDelete(dataEngine, name, uuid, instanceT
 	}
 
 	client := c.getControllerServiceClient()
-	ctx, cancel := context.WithTimeout(context.Background(), types.GRPCServiceTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), types.GRPCServiceMutateTimeout)
 	defer cancel()
 
 	p, err := client.InstanceDelete(ctx, &rpc.InstanceDeleteRequest{

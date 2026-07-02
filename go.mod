@@ -234,6 +234,6 @@ replace github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260610
 
 replace github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260610092230-6ea821a31715
 
-replace github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.12.0-dev-20260419.0.20260610092544-cc5503db2338
+replace github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.11.1-linkpool.117
 
 replace github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
