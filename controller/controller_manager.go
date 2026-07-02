@@ -24,7 +24,15 @@ import (
 )
 
 var (
-	Workers              = 5
+	Workers = 5
+	// EngineFrontendWorkers is deliberately wider than the default: each v2
+	// engine frontend create blocks its worker for the full kernel-side
+	// ladder (nvme connect, udev settle, dm build — 30-90s under load), so a
+	// node-wide recovery of dozens of frontends is paced almost entirely by
+	// this pool. The per-volume host locks on the instance manager keep
+	// concurrent creates safe; 12 sits below the point where parallel udev/dm
+	// work starts contending in the kernel.
+	EngineFrontendWorkers = 12
 	longhornFinalizerKey = longhorn.SchemeGroupVersion.Group
 )
 
@@ -190,7 +198,7 @@ func StartControllers(logger logrus.FieldLogger, clients *client.Clients,
 	// Start goroutines for Longhorn controllers
 	go replicaController.Run(Workers, stopCh)
 	go engineController.Run(Workers, stopCh)
-	go engineFrontendController.Run(Workers, stopCh)
+	go engineFrontendController.Run(EngineFrontendWorkers, stopCh)
 	go volumeController.Run(Workers, stopCh)
 	go engineImageController.Run(Workers, stopCh)
 	go nodeController.Run(Workers, stopCh)
