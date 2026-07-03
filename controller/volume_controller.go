@@ -1710,6 +1710,18 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 
 	log := getLoggerForVolume(c.logger, v)
 
+	// wasServingBeforeReconcile records whether the volume was attached and
+	// usable (Healthy or Degraded) as of the last reconcile, before any fault
+	// logic below can flip Robustness. A v2 data-plane death requests the
+	// workload remount exactly once, on this serving->dead transition, so the
+	// pod is kicked immediately and NOT again during the recovery flap (the
+	// fault->detach->reattach cycles that rebuild the engine, where Robustness
+	// is already Unknown/Faulted). reconcileVolumeCondition only sets
+	// Healthy/Degraded while the engine is running, so this stays false through
+	// the flap.
+	wasServingBeforeReconcile := v.Status.Robustness == longhorn.VolumeRobustnessHealthy ||
+		v.Status.Robustness == longhorn.VolumeRobustnessDegraded
+
 	e, err := c.ds.PickVolumeCurrentEngine(v, es)
 	if err != nil {
 		return err
@@ -1870,14 +1882,12 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 		if v.Status.Robustness == longhorn.VolumeRobustnessFaulted && v.Status.State == longhorn.VolumeStateDetached {
 			v.Status.Robustness = longhorn.VolumeRobustnessUnknown
 			// The volume was faulty and there are usable replicas.
-			// Therefore, we set RemountRequestedAt so that KubernetesPodController restarts the workload pod.
-			// A v2 volume already requested the remount at fault time (the moment
-			// the data plane died) so the pod is kicked immediately. Re-requesting
-			// it here on every fault->detach->reattach cycle during recovery would
-			// advance RemountRequestedAt past the already-recreated pod and kick it
-			// a second time, so only fall back to requesting here if the fault-time
-			// path never did. v1 requests here as before.
-			if !types.IsDataEngineV2(v.Spec.DataEngine) || v.Status.RemountRequestedAt == "" {
+			// v1 requests the remount here, on reattach, so KubernetesPodController
+			// restarts the workload pod. A v2 volume already requested the remount
+			// at fault time (the immediate kick); re-requesting it here on every
+			// fault->detach->reattach cycle during recovery would kick the
+			// already-recreated pod again, so v2 skips it.
+			if !types.IsDataEngineV2(v.Spec.DataEngine) {
 				v.Status.RemountRequestedAt = c.nowHandler()
 				msg := fmt.Sprintf("Volume %v requested remount at %v", v.Name, v.Status.RemountRequestedAt)
 				c.eventRecorder.Event(v, corev1.EventTypeNormal, constant.EventReasonRemount, msg)
@@ -1893,7 +1903,7 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 			isDeliberateDetach := v.Spec.NodeID == "" &&
 				(v.Status.State == longhorn.VolumeStateDetaching ||
 					v.Status.State == longhorn.VolumeStateDetached)
-			if !isDeliberateDetach && volumeDeathShouldFault(v) {
+			if !isDeliberateDetach && (v.Status.CurrentNodeID != "" || (v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)) {
 				log.Warn("Engine of volume dead unexpectedly, setting v.Status.Robustness to faulted")
 				msg := fmt.Sprintf("Engine of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
 				c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
@@ -1939,6 +1949,20 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 
 		if err := c.faultVolumeOnEngineFrontendError(v, e, rs, efs, log); err != nil {
 			return err
+		}
+
+		// The fault logic above (engine dead / v2 EngineFrontend dead) may have
+		// just faulted a v2 volume. Request the workload remount once, on the
+		// serving->dead transition, so KubernetesPodController kicks the pod
+		// immediately. wasServingBeforeReconcile is only true on the first death
+		// reconcile of an episode; during the recovery flap Robustness is already
+		// Unknown/Faulted, so the remount is not re-issued and the recreated pod
+		// is not kicked again. v1 continues to request the remount on reattach.
+		if types.IsDataEngineV2(v.Spec.DataEngine) && wasServingBeforeReconcile &&
+			v.Status.Robustness == longhorn.VolumeRobustnessFaulted {
+			v.Status.RemountRequestedAt = c.nowHandler()
+			msg := fmt.Sprintf("Volume %v requested remount at %v after v2 data plane died", v.Name, v.Status.RemountRequestedAt)
+			c.eventRecorder.Event(v, corev1.EventTypeNormal, constant.EventReasonRemount, msg)
 		}
 	}
 
@@ -2029,28 +2053,6 @@ func (c *VolumeController) handleDelinquentAndStaleStateForFaultedRWXVolume(v *l
 //     stably-attached volume (Spec.NodeID == Status.CurrentNodeID, State
 //     Attached) so a normal detach — where the IM legitimately goes away — is
 //     never misread as a fault.
-// volumeDeathShouldFault reports whether an unexpected engine/frontend death
-// should fault the volume and trigger a remount. A volume with CurrentNodeID
-// set is (or was) actively attached, so a death there lost a live mount and is
-// always worth faulting. The second clause covers a volume that is expected to
-// attach but has not yet: for v1 an engine Error there is a failed attach worth
-// faulting, but a v1 attach never transiently reports Error. A v2 reattach,
-// by contrast, briefly reports the engine Error while the data plane
-// re-establishes on a new instance manager, so faulting on that clause
-// re-faults a volume mid-recovery and kicks the workload pod a second time.
-// v2 therefore only faults an actually-attached volume; a genuine v2 data-plane
-// death while attached is still caught here (CurrentNodeID set) and by the
-// frontend-error path.
-func volumeDeathShouldFault(v *longhorn.Volume) bool {
-	if v.Status.CurrentNodeID != "" {
-		return true
-	}
-	if types.IsDataEngineV2(v.Spec.DataEngine) {
-		return false
-	}
-	return v.Spec.NodeID != "" && v.Status.State != longhorn.VolumeStateAttached
-}
-
 func (c *VolumeController) v2VolumeDataPlaneDead(v *longhorn.Volume, e *longhorn.Engine, efs map[string]*longhorn.EngineFrontend, log *logrus.Entry) bool {
 	if ef, err := pickCurrentEngineFrontend(v, efs); err == nil && ef != nil && ef.Status.CurrentState == longhorn.InstanceStateError {
 		return true
@@ -2084,21 +2086,22 @@ func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, 
 	if !c.v2VolumeDataPlaneDead(v, e, efs, log) {
 		return nil
 	}
-	if !volumeDeathShouldFault(v) {
+	attachedOrExpectedAttached := v.Status.CurrentNodeID != "" ||
+		(v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)
+	if !attachedOrExpectedAttached {
 		return nil
 	}
 
-	// A volume is "serving" when it is attached and usable (Healthy or
-	// Degraded). Only that transition is a fresh, unexpected death worth
-	// faulting and remounting for. During recovery the volume flaps
-	// faulted->detach->reattach->(engine still error)->faulted every few
-	// seconds; in those cycles the robustness is already Unknown/Faulted, so
-	// gating on "was serving" requests the remount exactly once per episode and
-	// keeps RemountRequestedAt from advancing past the already-recreated pod and
-	// kicking it again.
-	wasServing := v.Status.Robustness == longhorn.VolumeRobustnessHealthy ||
-		v.Status.Robustness == longhorn.VolumeRobustnessDegraded
-
+	// Fault the volume so the engine is torn down and rebuilt (recovery). The
+	// remount request that kicks the workload pod is issued once per death
+	// episode by ReconcileVolumeState (gated on the serving->dead transition),
+	// not here, so the recreated pod is not kicked again during the recovery
+	// flap where this path fires repeatedly.
+	if v.Status.Robustness != longhorn.VolumeRobustnessFaulted {
+		log.Warn("EngineFrontend of volume dead unexpectedly, setting v.Status.Robustness to faulted")
+		msg := fmt.Sprintf("EngineFrontend of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
+		c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
+	}
 	e.Spec.LogRequested = true
 	for _, r := range rs {
 		if r.Status.CurrentState == longhorn.InstanceStateRunning {
@@ -2107,20 +2110,7 @@ func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, 
 		}
 	}
 	v.Status.Robustness = longhorn.VolumeRobustnessFaulted
-	if err := c.handleDelinquentAndStaleStateForFaultedRWXVolume(v); err != nil {
-		return err
-	}
-
-	if wasServing {
-		log.Warn("EngineFrontend of volume dead unexpectedly, setting v.Status.Robustness to faulted")
-		msg := fmt.Sprintf("EngineFrontend of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
-		c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
-
-		v.Status.RemountRequestedAt = c.nowHandler()
-		remountMsg := fmt.Sprintf("Volume %v requested remount at %v after v2 data plane died", v.Name, v.Status.RemountRequestedAt)
-		c.eventRecorder.Event(v, corev1.EventTypeNormal, constant.EventReasonRemount, remountMsg)
-	}
-	return nil
+	return c.handleDelinquentAndStaleStateForFaultedRWXVolume(v)
 }
 
 func (c *VolumeController) requestRemountIfFileSystemReadOnly(v *longhorn.Volume, e *longhorn.Engine) {
