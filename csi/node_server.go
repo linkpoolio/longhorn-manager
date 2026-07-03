@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -487,26 +488,24 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return nil, status.Errorf(codes.InvalidArgument, "volume %s has invalid frontend type %v", volumeID, volume.Frontend)
 	}
 
-	// Check volume attachment status
-	v2DevicePath := ""
-	if types.IsDataEngineV2(longhorn.DataEngineType(volume.DataEngine)) {
-		v2DevicePath, err = getV2VolumeEndpointForNode(volume, ns.nodeID)
-		if err != nil {
-			log.WithError(err).Warnf("Volume %v does not have a ready v2 engine frontend on node %v", volumeID, ns.nodeID)
-		}
-	}
-	if volume.State != string(longhorn.VolumeStateAttached) ||
-		(types.IsDataEngineV1(longhorn.DataEngineType(volume.DataEngine)) && volume.Controllers[0].Endpoint == "") ||
-		(types.IsDataEngineV2(longhorn.DataEngineType(volume.DataEngine)) && v2DevicePath == "") {
+	// Wait in-call for the volume to become stageable instead of failing
+	// fast: after an unexpected detach (instance manager death) the consumer
+	// pod is kicked immediately and its first stage call typically arrives
+	// while the volume is still reattaching. Each fast failure feeds
+	// kubelet's exponential mount backoff (up to ~2m between retries), so
+	// the volume ends up waiting on kubelet rather than the reverse. The
+	// wait honors kubelet's own CSI call deadline (csiTimeout, 2m) via the
+	// request context and returns a retryable error if the volume doesn't
+	// make it, so the worst case degrades to today's behavior.
+	if _, _, ok := volumeStageable(volume, ns.nodeID); !ok {
 		log.Infof("Volume %v hasn't been attached yet, unmounting potential mount point %v", volumeID, stagingTargetPath)
 		if err := unmount(stagingTargetPath, mounter); err != nil {
 			log.WithError(err).Warnf("Failed to unmount stagingTargetPath %v", stagingTargetPath)
 		}
-		return nil, status.Errorf(codes.InvalidArgument, "volume %s hasn't been attached yet", volumeID)
 	}
-
-	if !volume.Ready {
-		return nil, status.Errorf(codes.Aborted, "volume %s is not ready for workloads", volumeID)
+	volume, err = ns.waitForVolumeStageable(ctx, volumeID, log)
+	if err != nil {
+		return nil, err
 	}
 
 	if requiresSharedAccess(volume, volumeCapability) && !volume.Migratable {
@@ -533,9 +532,15 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
 
-	devicePath := volume.Controllers[0].Endpoint
-	if types.IsDataEngineV2(longhorn.DataEngineType(volume.DataEngine)) {
-		devicePath = v2DevicePath
+	devicePath, _, _ := volumeStageable(volume, ns.nodeID)
+
+	// The device node can exist before the data path behind it is usable
+	// (dm created, target still connecting). blkid on such a device reports
+	// "no filesystem" — indistinguishable from an unformatted volume — and
+	// the stage would try to mkfs it. Require a successful read before any
+	// format detection.
+	if err := waitForDeviceReadable(ctx, devicePath, log); err != nil {
+		return nil, err
 	}
 
 	diskFormat, err := getDiskFormat(devicePath)
@@ -1184,4 +1189,114 @@ func restageRequired(volume *longhornclient.Volume,
 	}
 	isStaged, err := ensureMountPoint(stagingTargetPath, mounter)
 	return !isStaged, err
+}
+
+// volumeStageable reports whether the volume is attached on nodeID with a
+// usable endpoint and ready for workloads, returning the device path when it
+// is. Pure so the staging wait condition is unit-testable.
+func volumeStageable(volume *longhornclient.Volume, nodeID string) (devicePath, reason string, ok bool) {
+	if types.IsDataEngineV2(longhorn.DataEngineType(volume.DataEngine)) {
+		v2DevicePath, err := getV2VolumeEndpointForNode(volume, nodeID)
+		if err != nil || v2DevicePath == "" {
+			return "", "no ready v2 engine frontend on this node", false
+		}
+		devicePath = v2DevicePath
+	} else {
+		if len(volume.Controllers) == 0 || volume.Controllers[0].Endpoint == "" {
+			return "", "no controller endpoint", false
+		}
+		devicePath = volume.Controllers[0].Endpoint
+	}
+	if volume.State != string(longhorn.VolumeStateAttached) {
+		return "", fmt.Sprintf("volume state is %s", volume.State), false
+	}
+	if !volume.Ready {
+		return "", "volume is not ready for workloads", false
+	}
+	return devicePath, "", true
+}
+
+// stageWaitDeadline bounds an in-call wait under kubelet's CSI RPC timeout
+// (csiTimeout, 2m): whichever is sooner of the request context's own deadline
+// minus a safety margin, or maxWait from now.
+func stageWaitDeadline(ctx context.Context, maxWait time.Duration) time.Time {
+	deadline := time.Now().Add(maxWait)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		if buffered := ctxDeadline.Add(-10 * time.Second); buffered.Before(deadline) {
+			deadline = buffered
+		}
+	}
+	return deadline
+}
+
+// waitForVolumeStageable polls the volume until it is stageable on this node
+// or the deadline passes. Timeout returns codes.Unavailable so kubelet
+// retries — never worse than the previous fail-fast behavior.
+func (ns *NodeServer) waitForVolumeStageable(ctx context.Context, volumeID string, log *logrus.Entry) (*longhornclient.Volume, error) {
+	deadline := stageWaitDeadline(ctx, 90*time.Second)
+	reason := ""
+	for waited := false; ; waited = true {
+		volume, err := ns.apiClient.Volume.ById(volumeID)
+		if err != nil {
+			return nil, status.Error(codes.Internal, errors.Wrapf(err, "failed to get volume %s while waiting for it to become stageable", volumeID).Error())
+		}
+		if volume == nil {
+			return nil, status.Errorf(codes.NotFound, "volume %s not found", volumeID)
+		}
+		var ok bool
+		if _, reason, ok = volumeStageable(volume, ns.nodeID); ok {
+			if waited {
+				log.Infof("Volume %v became stageable while waiting in-call", volumeID)
+			}
+			return volume, nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return nil, status.Errorf(codes.Unavailable, "volume %s is not stageable on node %s after in-call wait: %s", volumeID, ns.nodeID, reason)
+		}
+		if !waited {
+			log.Infof("Volume %v is not stageable yet (%s); waiting in-call instead of failing into kubelet mount backoff", volumeID, reason)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// deviceReadCheckFn is a seam for tests; production reads the first 4KiB.
+var deviceReadCheckFn = func(devicePath string) error {
+	f, err := os.OpenFile(devicePath, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, 4096)
+	_, err = f.Read(buf)
+	return err
+}
+
+// waitForDeviceReadable requires a successful read from the device before the
+// stage proceeds to format detection and mount. Timeout returns
+// codes.Unavailable (retryable).
+func waitForDeviceReadable(ctx context.Context, devicePath string, log *logrus.Entry) error {
+	deadline := stageWaitDeadline(ctx, 60*time.Second)
+	for waited := false; ; waited = true {
+		err := deviceReadCheckFn(devicePath)
+		if err == nil {
+			if waited {
+				log.Infof("Device %v became readable while waiting in-call", devicePath)
+			}
+			return nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return status.Errorf(codes.Unavailable, "device %s is not readable after in-call wait: %v", devicePath, err)
+		}
+		if !waited {
+			log.WithError(err).Infof("Device %v is not readable yet; waiting in-call before format detection", devicePath)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
