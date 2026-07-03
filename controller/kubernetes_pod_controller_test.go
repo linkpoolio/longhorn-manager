@@ -404,7 +404,7 @@ func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *
 		}
 		pvc := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{Name: TestPVCName, Namespace: TestNamespace},
-			Spec: corev1.PersistentVolumeClaimSpec{VolumeName: pv.Name},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: pv.Name},
 		}
 		pod := &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -471,4 +471,115 @@ func (s *TestSuite) TestHandlePodDeletionForceDeletesOnV2EngineFrontendError(c *
 			c.Assert(*opts.GracePeriodSeconds, Equals, int64(30), Commentf("Test case: %s - %s", name, tc.description))
 		}
 	}
+}
+
+// A dead v2 instance manager pod must fan out workload pod deletion to every
+// attached v2 volume on its node in one pass — the per-volume kick cascade
+// lands minutes late and causes doomed reattach cycles. Only
+// controller-managed pods on the IM's node are kicked; bare pods, other
+// nodes' volumes, and v1 volumes are left alone.
+func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C) {
+	datastore.SkipListerCheck = true
+	defer func() { datastore.SkipListerCheck = false }()
+
+	kubeClient := fake.NewSimpleClientset()
+	lhClient := lhfake.NewSimpleClientset() //nolint:staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset()
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+	kc, err := newTestKubernetesPodController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+	c.Assert(err, IsNil)
+
+	now := metav1.NewTime(time.Now().UTC())
+	imPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "instance-manager-deadbeef",
+			Namespace:         TestNamespace,
+			DeletionTimestamp: &now,
+			Labels: map[string]string{
+				types.GetLonghornLabelComponentKey():                     types.LonghornLabelInstanceManager,
+				types.GetLonghornLabelKey(types.LonghornLabelDataEngine): string(longhorn.DataEngineTypeV2),
+			},
+		},
+		Spec: corev1.PodSpec{NodeName: TestNode1},
+	}
+	c.Assert(isV2InstanceManagerPod(imPod), Equals, true)
+
+	mkVol := func(name string, engine longhorn.DataEngineType, node, podName string) *longhorn.Volume {
+		v := newVolume(name, 1)
+		v.Namespace = TestNamespace
+		v.Spec.DataEngine = engine
+		v.Spec.NodeID = node
+		v.Status.State = longhorn.VolumeStateAttached
+		v.Status.KubernetesStatus = longhorn.KubernetesStatus{
+			Namespace:       TestNamespace,
+			WorkloadsStatus: []longhorn.WorkloadStatus{{PodName: podName}},
+		}
+		return v
+	}
+	mkPod := func(name string, managed bool) *corev1.Pod {
+		p := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         TestNamespace,
+				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
+			},
+			Spec: corev1.PodSpec{NodeName: TestNode1},
+		}
+		if managed {
+			p.OwnerReferences = []metav1.OwnerReference{{
+				APIVersion: appsv1.SchemeGroupVersion.String(),
+				Kind:       types.KubernetesKindStatefulSet,
+				Name:       "sts",
+				Controller: ptrTo(true),
+			}}
+		}
+		return p
+	}
+
+	vols := []*longhorn.Volume{
+		mkVol("vol-kick", longhorn.DataEngineTypeV2, TestNode1, "pod-kick"),
+		mkVol("vol-bare", longhorn.DataEngineTypeV2, TestNode1, "pod-bare"),
+		mkVol("vol-other-node", longhorn.DataEngineTypeV2, TestNode2, "pod-other"),
+		mkVol("vol-v1", longhorn.DataEngineTypeV1, TestNode1, "pod-v1"),
+	}
+	pods := []*corev1.Pod{
+		mkPod("pod-kick", true),
+		mkPod("pod-bare", false),
+		mkPod("pod-other", true),
+		mkPod("pod-v1", true),
+	}
+
+	autoDeleteSetting := newSetting(string(types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly), "true")
+	c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Settings().Informer().GetIndexer().Add(autoDeleteSetting), IsNil)
+	_, err = lhClient.LonghornV1beta2().Settings(TestNamespace).Create(context.TODO(), autoDeleteSetting, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	for _, v := range vols {
+		c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().Volumes().Informer().GetIndexer().Add(v), IsNil)
+		_, err = lhClient.LonghornV1beta2().Volumes(TestNamespace).Create(context.TODO(), v, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+	}
+	for _, p := range pods {
+		c.Assert(informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer().Add(p), IsNil)
+		_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), p, metav1.CreateOptions{})
+		c.Assert(err, IsNil)
+	}
+
+	kubeClient.ClearActions()
+	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod), IsNil)
+
+	deleted := []string{}
+	for _, a := range kubeClient.Actions() {
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
+			deleted = append(deleted, a.(ktesting.DeleteAction).GetName())
+		}
+	}
+	c.Assert(deleted, DeepEquals, []string{"pod-kick"})
+
+	// A live (non-deleting) IM pod must be a no-op.
+	kubeClient.ClearActions()
+	livePod := imPod.DeepCopy()
+	livePod.DeletionTimestamp = nil
+	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(livePod), IsNil)
+	c.Assert(kubeClient.Actions(), HasLen, 0)
 }
