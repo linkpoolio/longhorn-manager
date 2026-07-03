@@ -1839,6 +1839,52 @@ func (s *TestSuite) TestFaultVolumeSkippedDuringV2AttachingRecovery(c *C) {
 	c.Assert(v.Status.RemountRequestedAt, Equals, "")
 }
 
+func (s *TestSuite) TestFaultVolumeRequestsRemountOncePerEpisode(c *C) {
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+	vc, err := newTestVolumeController(lhClient, kubeClient, extensionsClient, informerFactories, TestOwnerID1)
+	c.Assert(err, IsNil)
+
+	// An attached v2 volume whose EngineFrontend is in Error, at a given
+	// robustness. CurrentNodeID is set so volumeDeathShouldFault is satisfied.
+	attachedV2 := func(robustness longhorn.VolumeRobustness) (*longhorn.Volume, *longhorn.Engine, map[string]*longhorn.Replica, map[string]*longhorn.EngineFrontend) {
+		v := newVolume(TestVolumeName, 1)
+		v.Spec.DataEngine = longhorn.DataEngineTypeV2
+		v.Spec.NodeID = TestNode1
+		v.Status.CurrentNodeID = TestNode1
+		v.Status.State = longhorn.VolumeStateAttached
+		v.Status.Robustness = robustness
+		v.Status.CurrentImage = TestEngineImage
+		e := newEngineForVolume(v)
+		e.Spec.DataEngine = longhorn.DataEngineTypeV2
+		e.Status.CurrentState = longhorn.InstanceStateError
+		r := newReplicaForVolume(v, e, TestNode1, TestDiskID1)
+		r.Status.CurrentState = longhorn.InstanceStateRunning
+		ef := newEngineFrontendForVolume(v, e.Name, TestNode1, "")
+		ef.Status.CurrentState = longhorn.InstanceStateError
+		return v, e, map[string]*longhorn.Replica{r.Name: r}, map[string]*longhorn.EngineFrontend{ef.Name: ef}
+	}
+
+	// Degraded (still serving) -> fault + remount.
+	v, e, rs, efs := attachedV2(longhorn.VolumeRobustnessDegraded)
+	log := getLoggerForVolume(vc.logger, v)
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessFaulted)
+	c.Assert(v.Status.RemountRequestedAt, Equals, getTestNow())
+
+	// Mid-recovery flap: robustness already Unknown (the reattach branch reset
+	// it) with a remount still pending. The EF is still in Error, but the volume
+	// must NOT re-request the remount, or it would kick the recreated pod again.
+	v, e, rs, efs = attachedV2(longhorn.VolumeRobustnessUnknown)
+	v.Status.RemountRequestedAt = "pending-from-fault-time"
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessFaulted)
+	c.Assert(v.Status.RemountRequestedAt, Equals, "pending-from-fault-time")
+}
+
 func (s *TestSuite) TestAreVolumeDependentResourcesOpenedV2RequiresEngineFrontendEndpoint(c *C) {
 	vc := &VolumeController{}
 
