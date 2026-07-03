@@ -1706,6 +1706,71 @@ func (s *TestSuite) TestFaultVolumeOnEngineFrontendError(c *C) {
 	c.Assert(v.Status.RemountRequestedAt, Equals, "")
 }
 
+func (s *TestSuite) TestFaultVolumeOnDeadInstanceManager(c *C) {
+	kubeClient := fake.NewSimpleClientset()                    // nolint: staticcheck
+	lhClient := lhfake.NewSimpleClientset()                    // nolint: staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset() // nolint: staticcheck
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+	vc, err := newTestVolumeController(lhClient, kubeClient, extensionsClient, informerFactories, TestOwnerID1)
+	c.Assert(err, IsNil)
+
+	imName := "im-v2-node1"
+	// healthy EF so the slow signal is NOT what triggers — we are exercising
+	// the fast dead-IM signal in isolation.
+	setup := func(imState longhorn.InstanceManagerState, imExists, stablyAttached bool) (*longhorn.Volume, *longhorn.Engine, map[string]*longhorn.Replica, map[string]*longhorn.EngineFrontend) {
+		v := newVolume(TestVolumeName, 1)
+		v.Spec.DataEngine = longhorn.DataEngineTypeV2
+		v.Spec.NodeID = TestNode1
+		v.Status.CurrentNodeID = TestNode1
+		v.Status.State = longhorn.VolumeStateAttached
+		v.Status.Robustness = longhorn.VolumeRobustnessHealthy
+		v.Status.CurrentImage = TestEngineImage
+		if !stablyAttached {
+			v.Status.CurrentNodeID = "" // mid-detach: not stably attached
+			v.Status.State = longhorn.VolumeStateDetaching
+		}
+		e := newEngineForVolume(v)
+		e.Spec.DataEngine = longhorn.DataEngineTypeV2
+		e.Status.CurrentState = longhorn.InstanceStateRunning
+		e.Status.InstanceManagerName = imName
+		r := newReplicaForVolume(v, e, TestNode1, TestDiskID1)
+		r.Status.CurrentState = longhorn.InstanceStateRunning
+		ef := newEngineFrontendForVolume(v, e.Name, TestNode1, "")
+		ef.Status.CurrentState = longhorn.InstanceStateRunning // healthy EF
+		if imExists {
+			im := &longhorn.InstanceManager{
+				ObjectMeta: metav1.ObjectMeta{Name: imName, Namespace: TestNamespace},
+				Status:     longhorn.InstanceManagerStatus{CurrentState: imState},
+			}
+			c.Assert(informerFactories.LhInformerFactory.Longhorn().V1beta2().InstanceManagers().Informer().GetIndexer().Add(im), IsNil)
+		}
+		return v, e, map[string]*longhorn.Replica{r.Name: r}, map[string]*longhorn.EngineFrontend{ef.Name: ef}
+	}
+
+	log := getLoggerForVolume(vc.logger, newVolume(TestVolumeName, 1))
+
+	// Dead IM (not running) while stably attached -> fast fault + remount.
+	v, e, rs, efs := setup(longhorn.InstanceManagerStateError, true, true)
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessFaulted)
+	c.Assert(v.Status.RemountRequestedAt, Equals, getTestNow())
+
+	// Running IM -> no fault (healthy EF, live IM).
+	v, e, rs, efs = setup(longhorn.InstanceManagerStateRunning, true, true)
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessHealthy)
+	c.Assert(v.Status.RemountRequestedAt, Equals, "")
+
+	// Not stably attached (mid-detach) with a dead IM -> NO fault: a normal
+	// detach must not be misread as a data-plane failure.
+	imName = "im-v2-node1-b"
+	v, e, rs, efs = setup(longhorn.InstanceManagerStateError, true, false)
+	c.Assert(vc.faultVolumeOnEngineFrontendError(v, e, rs, efs, log), IsNil)
+	c.Assert(v.Status.Robustness, Equals, longhorn.VolumeRobustnessHealthy)
+	c.Assert(v.Status.RemountRequestedAt, Equals, "")
+}
+
 func (s *TestSuite) TestAreVolumeDependentResourcesOpenedV2RequiresEngineFrontendEndpoint(c *C) {
 	vc := &VolumeController{}
 

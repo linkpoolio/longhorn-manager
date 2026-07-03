@@ -2007,12 +2007,51 @@ func (c *VolumeController) handleDelinquentAndStaleStateForFaultedRWXVolume(v *l
 // detaches, rebuilds the EF on reattach, and remounts the fresh device. Only
 // request the remount on the transition into Faulted so the replacement pod is
 // not deleted again every reconcile while the EF is still recovering.
+// v2VolumeDataPlaneDead reports whether a v2 volume's data plane is dead and
+// the workload needs a remount. Two signals:
+//
+//   - Definitive (slow): the current engine frontend has reached Error. The
+//     engine frontend controller only marks this tens of seconds after the
+//     instance manager actually dies, so alone it leaves the workload on a
+//     dead mount for that whole gap.
+//   - Fast: the engine's instance manager is no longer running. An instance
+//     manager CR deletion (the intended v2 IM roll mechanism) or crash is
+//     observable immediately, so faulting on it collapses the detection gap
+//     and lets the single remount path kick the workload promptly. Gated to a
+//     stably-attached volume (Spec.NodeID == Status.CurrentNodeID, State
+//     Attached) so a normal detach — where the IM legitimately goes away — is
+//     never misread as a fault.
+func (c *VolumeController) v2VolumeDataPlaneDead(v *longhorn.Volume, e *longhorn.Engine, efs map[string]*longhorn.EngineFrontend, log *logrus.Entry) bool {
+	if ef, err := pickCurrentEngineFrontend(v, efs); err == nil && ef != nil && ef.Status.CurrentState == longhorn.InstanceStateError {
+		return true
+	}
+
+	stablyAttached := v.Status.State == longhorn.VolumeStateAttached &&
+		v.Spec.NodeID != "" && v.Spec.NodeID == v.Status.CurrentNodeID
+	if !stablyAttached || e == nil || e.Status.InstanceManagerName == "" {
+		return false
+	}
+	im, err := c.ds.GetInstanceManagerRO(e.Status.InstanceManagerName)
+	if datastore.ErrorIsNotFound(err) {
+		log.Warnf("Engine instance manager %v is gone; treating volume data plane as dead", e.Status.InstanceManagerName)
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	if im == nil || im.Status.CurrentState != longhorn.InstanceManagerStateRunning {
+		log.Warnf("Engine instance manager %v is not running (state %v); treating volume data plane as dead",
+			e.Status.InstanceManagerName, func() longhorn.InstanceManagerState { if im == nil { return "" }; return im.Status.CurrentState }())
+		return true
+	}
+	return false
+}
+
 func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, e *longhorn.Engine, rs map[string]*longhorn.Replica, efs map[string]*longhorn.EngineFrontend, log *logrus.Entry) error {
 	if !types.IsDataEngineV2(v.Spec.DataEngine) {
 		return nil
 	}
-	ef, err := pickCurrentEngineFrontend(v, efs)
-	if err != nil || ef == nil || ef.Status.CurrentState != longhorn.InstanceStateError {
+	if !c.v2VolumeDataPlaneDead(v, e, efs, log) {
 		return nil
 	}
 	attachedOrExpectedAttached := v.Status.CurrentNodeID != "" ||
@@ -2040,7 +2079,7 @@ func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, 
 
 	if !wasFaulted {
 		v.Status.RemountRequestedAt = c.nowHandler()
-		remountMsg := fmt.Sprintf("Volume %v requested remount at %v after EngineFrontend error", v.Name, v.Status.RemountRequestedAt)
+		remountMsg := fmt.Sprintf("Volume %v requested remount at %v after v2 data plane died", v.Name, v.Status.RemountRequestedAt)
 		c.eventRecorder.Event(v, corev1.EventTypeNormal, constant.EventReasonRemount, remountMsg)
 	}
 	return nil

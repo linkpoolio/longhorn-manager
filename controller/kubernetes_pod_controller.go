@@ -1,11 +1,8 @@
 package controller
 
 import (
-	"sync"
-
 	"context"
 	"fmt"
-	apitypes "k8s.io/apimachinery/pkg/types"
 	"strings"
 	"time"
 
@@ -53,19 +50,7 @@ type KubernetesPodController struct {
 	ds *datastore.DataStore
 
 	cacheSyncs []cache.InformerSynced
-
-	// handledIMDeaths dedups the dead-instance-manager workload fan-out: the
-	// pod controller reprocesses an instance manager pod's deletion key
-	// several times as it terminates (deletionTimestamp -> finalizers ->
-	// gone), and the instance manager pod name is deterministic, so without
-	// dedup each reprocess re-kicks the same workload pods. Keyed by the IM
-	// pod UID (one real death = one UID); entries are swept after a TTL to
-	// bound growth.
-	handledIMDeaths      map[apitypes.UID]time.Time
-	handledIMDeathsMutex sync.Mutex
 }
-
-const handledIMDeathTTL = 10 * time.Minute
 
 func NewKubernetesPodController(
 	logger logrus.FieldLogger,
@@ -82,8 +67,7 @@ func NewKubernetesPodController(
 	})
 
 	kc := &KubernetesPodController{
-		handledIMDeaths: map[apitypes.UID]time.Time{},
-		baseController:  newBaseController("longhorn-kubernetes-pod", logger),
+		baseController: newBaseController("longhorn-kubernetes-pod", logger),
 
 		controllerID: controllerID,
 
@@ -187,10 +171,6 @@ func (kc *KubernetesPodController) syncHandler(key string) (err error) {
 
 	if isCSIPluginPod(pod) {
 		return kc.handleWorkloadPodDeletionIfCSIPluginPodIsDown(pod)
-	}
-
-	if isV2InstanceManagerPod(pod) {
-		return kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(pod)
 	}
 
 	if err := kc.cleanupForceDeletedPodResources(pod); err != nil {
@@ -352,144 +332,6 @@ func (kc *KubernetesPodController) handleWorkloadPodDeletionIfCSIPluginPodIsDown
 	}
 
 	return nil
-}
-
-// handleWorkloadPodDeletionIfInstanceManagerPodIsDown deletes the workload
-// pods of every v2 volume attached on the node whose instance manager pod is
-// being deleted.
-//
-// When a v2 instance manager dies, every volume it serves detaches at once.
-// The per-volume kick path (engine frontend death -> volume fault -> pod
-// deletion) rediscovers that fact one volume at a time through several
-// controller hops: the first pod kick lands ~2 minutes after the IM death and
-// the rest spread over minutes. In that window Longhorn reattaches volumes to
-// doomed pods, and each late kick then forces a second detach/reattach cycle.
-// The instance manager pod deletion already names the complete casualty list,
-// so fan the kicks out from it directly: the replacement pods are recreated
-// while recovery is still in flight, and each volume is attached exactly once
-// — for the pod that will actually use it.
-// imDeathAlreadyHandled reports whether the fan-out has already run for this
-// instance manager pod UID, recording it (and sweeping expired entries) if
-// not. This makes the fan-out fire at most once per real IM death even though
-// the pod controller reprocesses the terminating IM pod's key many times.
-func (kc *KubernetesPodController) imDeathAlreadyHandled(uid apitypes.UID) bool {
-	kc.handledIMDeathsMutex.Lock()
-	defer kc.handledIMDeathsMutex.Unlock()
-
-	now := time.Now()
-	for u, seen := range kc.handledIMDeaths {
-		if now.Sub(seen) > handledIMDeathTTL {
-			delete(kc.handledIMDeaths, u)
-		}
-	}
-	if _, ok := kc.handledIMDeaths[uid]; ok {
-		return true
-	}
-	kc.handledIMDeaths[uid] = now
-	return false
-}
-
-func (kc *KubernetesPodController) handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod *corev1.Pod) error {
-	logSkip := "Skipping deletion of workload pod for dead instance manager"
-
-	log := getLoggerForPod(kc.logger, imPod)
-
-	if imPod.DeletionTimestamp.IsZero() {
-		return nil
-	}
-
-	autoDeletePodWhenVolumeDetachedUnexpectedly, err := kc.ds.GetSettingAsBool(types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly)
-	if err != nil {
-		return err
-	}
-	if !autoDeletePodWhenVolumeDetachedUnexpectedly {
-		log.Warnf("Aborting deletion of workload pods for dead instance manager. The setting %v is not enabled", types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly)
-		return nil
-	}
-
-	if kc.imDeathAlreadyHandled(imPod.UID) {
-		return nil
-	}
-
-	volumes, err := kc.ds.ListVolumesRO()
-	if err != nil {
-		return err
-	}
-
-	log.Info("v2 instance manager pod on node is down, fanning out workload pod deletion for its attached volumes")
-
-	var filteredPods []*corev1.Pod
-	for _, volume := range volumes {
-		if !types.IsDataEngineV2(volume.Spec.DataEngine) {
-			continue
-		}
-		if volume.Spec.NodeID != imPod.Spec.NodeName {
-			continue
-		}
-		if volume.Status.State != longhorn.VolumeStateAttached && volume.Status.State != longhorn.VolumeStateAttaching {
-			continue
-		}
-		for _, workloadStatus := range volume.Status.KubernetesStatus.WorkloadsStatus {
-			_log := log.WithFields(logrus.Fields{"volume": volume.Name, "workloadPod": workloadStatus.PodName})
-
-			pod, err := kc.kubeClient.CoreV1().Pods(volume.Status.KubernetesStatus.Namespace).Get(context.TODO(), workloadStatus.PodName, metav1.GetOptions{})
-			if err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return err
-			}
-			if !pod.DeletionTimestamp.IsZero() {
-				continue
-			}
-			// Skip pods that started after this instance manager died — they
-			// are the fresh replacements, not casualties. Combined with the
-			// per-incarnation dedup above (this handler runs at most once per
-			// imPod.UID), a workload pod is kicked exactly once per real IM
-			// death and never after it has come back.
-			if pod.Status.StartTime != nil && pod.Status.StartTime.Time.After(imPod.DeletionTimestamp.Time) {
-				_log.Debugf("%s. Workload pod started after the instance manager died; it is a fresh replacement", logSkip)
-				continue
-			}
-			// Only delete pods a controller will recreate.
-			if metav1.GetControllerOf(pod) == nil {
-				_log.Warnf("%s. Workload pod is not managed by a controller", logSkip)
-				continue
-			}
-			if pod.Spec.NodeName != imPod.Spec.NodeName {
-				continue
-			}
-			kc.eventRecorder.Eventf(volume, corev1.EventTypeWarning, constant.EventReasonRemount, "Requesting workload pod %v deletion because the instance manager pod %v serving volume %v died on node %v", pod.Name, imPod.Name, volume.Name, imPod.Spec.NodeName)
-			filteredPods = append(filteredPods, pod)
-		}
-	}
-
-	for _, pod := range filteredPods {
-		log.WithField("workloadPod", pod.Name).Info("Deleting workload pod of volume served by the dead instance manager")
-		if err := kc.kubeClient.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{}); err != nil && !datastore.ErrorIsNotFound(err) {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// isV2InstanceManagerPod reports whether the pod is a v2 data engine instance
-// manager pod.
-func isV2InstanceManagerPod(obj interface{}) bool {
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		deletedState, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			return false
-		}
-		pod, ok = deletedState.Obj.(*corev1.Pod)
-		if !ok {
-			return false
-		}
-	}
-	return pod.Labels[types.GetLonghornLabelComponentKey()] == types.LonghornLabelInstanceManager &&
-		pod.Labels[types.GetLonghornLabelKey(types.LonghornLabelDataEngine)] == string(longhorn.DataEngineTypeV2)
 }
 
 // isControllerInBlacklist returns true if the owner reference kind is in the blacklist.
@@ -978,17 +820,6 @@ func (kc *KubernetesPodController) enqueuePodChange(obj interface{}) {
 	}
 
 	if isCSIPluginPod(pod) {
-		if pod.Spec.NodeName == kc.controllerID {
-			kc.queue.Add(key)
-		}
-		return
-	}
-
-	// v2 instance manager pods carry no Longhorn PVC, so the PVC scan below
-	// would never enqueue them. Enqueue explicitly (same-node only, like the
-	// CSI plugin branch) so handleWorkloadPodDeletionIfInstanceManagerPodIsDown
-	// runs when one dies.
-	if isV2InstanceManagerPod(pod) {
 		if pod.Spec.NodeName == kc.controllerID {
 			kc.queue.Add(key)
 		}
