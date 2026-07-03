@@ -583,3 +583,43 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(livePod), IsNil)
 	c.Assert(kubeClient.Actions(), HasLen, 0)
 }
+
+// Regression for the .43 wiring gap: enqueuePodChange must admit v2 instance
+// manager pods (which carry no Longhorn PVC and so are skipped by the PVC
+// scan). Without this the fan-out handler is dead code — it was in .43 and
+// only a live IM-kick test caught it.
+func (s *TestSuite) TestEnqueuePodChangeAdmitsV2InstanceManagerPod(c *C) {
+	datastore.SkipListerCheck = true
+	defer func() { datastore.SkipListerCheck = false }()
+
+	kubeClient := fake.NewSimpleClientset()
+	lhClient := lhfake.NewSimpleClientset() //nolint:staticcheck
+	extensionsClient := apiextensionsfake.NewSimpleClientset()
+	informerFactories := util.NewInformerFactories(TestNamespace, kubeClient, lhClient, controller.NoResyncPeriodFunc())
+
+	kc, err := newTestKubernetesPodController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
+	c.Assert(err, IsNil)
+
+	imPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "instance-manager-abc",
+			Namespace: TestNamespace,
+			Labels: map[string]string{
+				types.GetLonghornLabelComponentKey():                     types.LonghornLabelInstanceManager,
+				types.GetLonghornLabelKey(types.LonghornLabelDataEngine): string(longhorn.DataEngineTypeV2),
+			},
+		},
+		Spec: corev1.PodSpec{NodeName: TestNode1}, // same node as controllerID
+	}
+
+	c.Assert(kc.queue.Len(), Equals, 0)
+	kc.enqueuePodChange(imPod)
+	c.Assert(kc.queue.Len(), Equals, 1, Commentf("v2 IM pod on the controller's node must be enqueued"))
+
+	// An IM pod on a different node must NOT be enqueued by this controller.
+	imOther := imPod.DeepCopy()
+	imOther.Name = "instance-manager-def"
+	imOther.Spec.NodeName = TestNode2
+	kc.enqueuePodChange(imOther)
+	c.Assert(kc.queue.Len(), Equals, 1, Commentf("IM pod on another node must not be enqueued here"))
+}

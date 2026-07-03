@@ -938,6 +938,17 @@ func (kc *KubernetesPodController) enqueuePodChange(obj interface{}) {
 		return
 	}
 
+	// v2 instance manager pods carry no Longhorn PVC, so the PVC scan below
+	// would never enqueue them. Enqueue explicitly (same-node only, like the
+	// CSI plugin branch) so handleWorkloadPodDeletionIfInstanceManagerPodIsDown
+	// runs when one dies.
+	if isV2InstanceManagerPod(pod) {
+		if pod.Spec.NodeName == kc.controllerID {
+			kc.queue.Add(key)
+		}
+		return
+	}
+
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim == nil {
 			continue
