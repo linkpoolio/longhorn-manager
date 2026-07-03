@@ -1885,7 +1885,7 @@ func (c *VolumeController) ReconcileVolumeState(v *longhorn.Volume, es map[strin
 			isDeliberateDetach := v.Spec.NodeID == "" &&
 				(v.Status.State == longhorn.VolumeStateDetaching ||
 					v.Status.State == longhorn.VolumeStateDetached)
-			if !isDeliberateDetach && (v.Status.CurrentNodeID != "" || (v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)) {
+			if !isDeliberateDetach && volumeDeathShouldFault(v) {
 				log.Warn("Engine of volume dead unexpectedly, setting v.Status.Robustness to faulted")
 				msg := fmt.Sprintf("Engine of volume %v dead unexpectedly, setting v.Status.Robustness to faulted", v.Name)
 				c.eventRecorder.Event(v, corev1.EventTypeWarning, constant.EventReasonDetachedUnexpectedly, msg)
@@ -2021,6 +2021,28 @@ func (c *VolumeController) handleDelinquentAndStaleStateForFaultedRWXVolume(v *l
 //     stably-attached volume (Spec.NodeID == Status.CurrentNodeID, State
 //     Attached) so a normal detach — where the IM legitimately goes away — is
 //     never misread as a fault.
+// volumeDeathShouldFault reports whether an unexpected engine/frontend death
+// should fault the volume and trigger a remount. A volume with CurrentNodeID
+// set is (or was) actively attached, so a death there lost a live mount and is
+// always worth faulting. The second clause covers a volume that is expected to
+// attach but has not yet: for v1 an engine Error there is a failed attach worth
+// faulting, but a v1 attach never transiently reports Error. A v2 reattach,
+// by contrast, briefly reports the engine Error while the data plane
+// re-establishes on a new instance manager, so faulting on that clause
+// re-faults a volume mid-recovery and kicks the workload pod a second time.
+// v2 therefore only faults an actually-attached volume; a genuine v2 data-plane
+// death while attached is still caught here (CurrentNodeID set) and by the
+// frontend-error path.
+func volumeDeathShouldFault(v *longhorn.Volume) bool {
+	if v.Status.CurrentNodeID != "" {
+		return true
+	}
+	if types.IsDataEngineV2(v.Spec.DataEngine) {
+		return false
+	}
+	return v.Spec.NodeID != "" && v.Status.State != longhorn.VolumeStateAttached
+}
+
 func (c *VolumeController) v2VolumeDataPlaneDead(v *longhorn.Volume, e *longhorn.Engine, efs map[string]*longhorn.EngineFrontend, log *logrus.Entry) bool {
 	if ef, err := pickCurrentEngineFrontend(v, efs); err == nil && ef != nil && ef.Status.CurrentState == longhorn.InstanceStateError {
 		return true
@@ -2054,9 +2076,7 @@ func (c *VolumeController) faultVolumeOnEngineFrontendError(v *longhorn.Volume, 
 	if !c.v2VolumeDataPlaneDead(v, e, efs, log) {
 		return nil
 	}
-	attachedOrExpectedAttached := v.Status.CurrentNodeID != "" ||
-		(v.Spec.NodeID != "" && v.Status.CurrentNodeID == "" && v.Status.State != longhorn.VolumeStateAttached)
-	if !attachedOrExpectedAttached {
+	if !volumeDeathShouldFault(v) {
 		return nil
 	}
 
