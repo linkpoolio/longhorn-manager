@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"sync"
+
 	"context"
 	"fmt"
+	apitypes "k8s.io/apimachinery/pkg/types"
 	"strings"
 	"time"
 
@@ -50,7 +53,19 @@ type KubernetesPodController struct {
 	ds *datastore.DataStore
 
 	cacheSyncs []cache.InformerSynced
+
+	// handledIMDeaths dedups the dead-instance-manager workload fan-out: the
+	// pod controller reprocesses an instance manager pod's deletion key
+	// several times as it terminates (deletionTimestamp -> finalizers ->
+	// gone), and the instance manager pod name is deterministic, so without
+	// dedup each reprocess re-kicks the same workload pods. Keyed by the IM
+	// pod UID (one real death = one UID); entries are swept after a TTL to
+	// bound growth.
+	handledIMDeaths      map[apitypes.UID]time.Time
+	handledIMDeathsMutex sync.Mutex
 }
+
+const handledIMDeathTTL = 10 * time.Minute
 
 func NewKubernetesPodController(
 	logger logrus.FieldLogger,
@@ -67,7 +82,8 @@ func NewKubernetesPodController(
 	})
 
 	kc := &KubernetesPodController{
-		baseController: newBaseController("longhorn-kubernetes-pod", logger),
+		handledIMDeaths: map[apitypes.UID]time.Time{},
+		baseController:  newBaseController("longhorn-kubernetes-pod", logger),
 
 		controllerID: controllerID,
 
@@ -352,6 +368,27 @@ func (kc *KubernetesPodController) handleWorkloadPodDeletionIfCSIPluginPodIsDown
 // so fan the kicks out from it directly: the replacement pods are recreated
 // while recovery is still in flight, and each volume is attached exactly once
 // — for the pod that will actually use it.
+// imDeathAlreadyHandled reports whether the fan-out has already run for this
+// instance manager pod UID, recording it (and sweeping expired entries) if
+// not. This makes the fan-out fire at most once per real IM death even though
+// the pod controller reprocesses the terminating IM pod's key many times.
+func (kc *KubernetesPodController) imDeathAlreadyHandled(uid apitypes.UID) bool {
+	kc.handledIMDeathsMutex.Lock()
+	defer kc.handledIMDeathsMutex.Unlock()
+
+	now := time.Now()
+	for u, seen := range kc.handledIMDeaths {
+		if now.Sub(seen) > handledIMDeathTTL {
+			delete(kc.handledIMDeaths, u)
+		}
+	}
+	if _, ok := kc.handledIMDeaths[uid]; ok {
+		return true
+	}
+	kc.handledIMDeaths[uid] = now
+	return false
+}
+
 func (kc *KubernetesPodController) handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod *corev1.Pod) error {
 	logSkip := "Skipping deletion of workload pod for dead instance manager"
 
@@ -367,6 +404,10 @@ func (kc *KubernetesPodController) handleWorkloadPodDeletionIfInstanceManagerPod
 	}
 	if !autoDeletePodWhenVolumeDetachedUnexpectedly {
 		log.Warnf("Aborting deletion of workload pods for dead instance manager. The setting %v is not enabled", types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly)
+		return nil
+	}
+
+	if kc.imDeathAlreadyHandled(imPod.UID) {
 		return nil
 	}
 
@@ -401,26 +442,13 @@ func (kc *KubernetesPodController) handleWorkloadPodDeletionIfInstanceManagerPod
 			if !pod.DeletionTimestamp.IsZero() {
 				continue
 			}
-			// Gate on the volume's own remount request, not the instance
-			// manager pod's deletion timestamp. The IM pod name is
-			// deterministic, so it is recreated and can be deleted again as
-			// the replacement settles; keying off imPod.DeletionTimestamp
-			// (which advances each cycle) re-kicks workload pods that already
-			// came back healthy. RemountRequestedAt is set once when the
-			// volume detaches unexpectedly, so a pod that started after it has
-			// a fresh mount and must never be kicked again — idempotent no
-			// matter how many times this handler fires.
-			if volume.Status.RemountRequestedAt == "" {
-				_log.Debugf("%s. Volume has no pending remount request", logSkip)
-				continue
-			}
-			remountRequestedAt, parseErr := util.ParseTimeZ(volume.Status.RemountRequestedAt)
-			if parseErr != nil {
-				_log.WithError(parseErr).Warnf("%s. Failed to parse RemountRequestedAt %v", logSkip, volume.Status.RemountRequestedAt)
-				continue
-			}
-			if pod.Status.StartTime == nil || pod.Status.StartTime.Time.After(remountRequestedAt) {
-				_log.Debugf("%s. Workload pod started after the remount request; its mount is fresh", logSkip)
+			// Skip pods that started after this instance manager died — they
+			// are the fresh replacements, not casualties. Combined with the
+			// per-incarnation dedup above (this handler runs at most once per
+			// imPod.UID), a workload pod is kicked exactly once per real IM
+			// death and never after it has come back.
+			if pod.Status.StartTime != nil && pod.Status.StartTime.Time.After(imPod.DeletionTimestamp.Time) {
+				_log.Debugf("%s. Workload pod started after the instance manager died; it is a fresh replacement", logSkip)
 				continue
 			}
 			// Only delete pods a controller will recreate.

@@ -492,14 +492,14 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 
 	now := time.Now().UTC()
 	imDeletion := metav1.NewTime(now)
-	remountAt := now.Add(-10 * time.Second).UTC().Format(time.RFC3339) // volume detached before the pod-recreate
-	staleStart := metav1.NewTime(now.Add(-5 * time.Minute))            // pod running well before the remount -> stale
-	freshStart := metav1.NewTime(now)                                  // pod started at/after remount -> fresh, must NOT be kicked
+	staleStart := metav1.NewTime(now.Add(-5 * time.Minute)) // running before the IM died -> kick
+	freshStart := metav1.NewTime(now.Add(time.Second))      // started after the IM died -> replacement, no kick
 
 	imPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "instance-manager-deadbeef",
 			Namespace:         TestNamespace,
+			UID:               "im-uid-1",
 			DeletionTimestamp: &imDeletion,
 			Labels: map[string]string{
 				types.GetLonghornLabelComponentKey():                     types.LonghornLabelInstanceManager,
@@ -510,13 +510,12 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	}
 	c.Assert(isV2InstanceManagerPod(imPod), Equals, true)
 
-	mkVol := func(name string, engine longhorn.DataEngineType, node, podName, remount string) *longhorn.Volume {
+	mkVol := func(name string, engine longhorn.DataEngineType, node, podName string) *longhorn.Volume {
 		v := newVolume(name, 1)
 		v.Namespace = TestNamespace
 		v.Spec.DataEngine = engine
 		v.Spec.NodeID = node
 		v.Status.State = longhorn.VolumeStateAttached
-		v.Status.RemountRequestedAt = remount
 		v.Status.KubernetesStatus = longhorn.KubernetesStatus{
 			Namespace:       TestNamespace,
 			WorkloadsStatus: []longhorn.WorkloadStatus{{PodName: podName}},
@@ -541,17 +540,15 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	}
 
 	vols := []*longhorn.Volume{
-		mkVol("vol-kick", longhorn.DataEngineTypeV2, TestNode1, "pod-kick", remountAt),   // stale pod -> kick
-		mkVol("vol-fresh", longhorn.DataEngineTypeV2, TestNode1, "pod-fresh", remountAt), // fresh pod -> NO kick (idempotency)
-		mkVol("vol-noremount", longhorn.DataEngineTypeV2, TestNode1, "pod-nr", ""),       // no remount request -> NO kick
-		mkVol("vol-bare", longhorn.DataEngineTypeV2, TestNode1, "pod-bare", remountAt),   // bare pod -> NO kick
-		mkVol("vol-other", longhorn.DataEngineTypeV2, TestNode2, "pod-other", remountAt), // other node -> NO kick
-		mkVol("vol-v1", longhorn.DataEngineTypeV1, TestNode1, "pod-v1", remountAt),       // v1 -> NO kick
+		mkVol("vol-kick", longhorn.DataEngineTypeV2, TestNode1, "pod-kick"),
+		mkVol("vol-fresh", longhorn.DataEngineTypeV2, TestNode1, "pod-fresh"),
+		mkVol("vol-bare", longhorn.DataEngineTypeV2, TestNode1, "pod-bare"),
+		mkVol("vol-other", longhorn.DataEngineTypeV2, TestNode2, "pod-other"),
+		mkVol("vol-v1", longhorn.DataEngineTypeV1, TestNode1, "pod-v1"),
 	}
 	pods := []*corev1.Pod{
 		mkPod("pod-kick", true, staleStart),
 		mkPod("pod-fresh", true, freshStart),
-		mkPod("pod-nr", true, staleStart),
 		mkPod("pod-bare", false, staleStart),
 		mkPod("pod-other", true, staleStart),
 		mkPod("pod-v1", true, staleStart),
@@ -583,19 +580,38 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 		return out
 	}
 
-	// First fire: only the stale, managed, same-node, v2, remount-pending pod.
+	// First fire: only the stale, managed, same-node, v2 pod is kicked.
 	c.Assert(deletedNames(), DeepEquals, []string{"pod-kick"})
 
-	// Idempotency (the observed quirk): re-firing must NOT kick the fresh pod
-	// nor re-kick anything. Simulate pod-kick having been recreated fresh.
-	freshKick := mkPod("pod-kick", true, metav1.NewTime(now.Add(time.Second)))
-	_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), freshKick, metav1.CreateOptions{})
+	// Same-death burst (the observed quirk): the pod controller reprocesses
+	// the terminating IM pod key repeatedly. Re-firing with the SAME UID must
+	// kick nothing — dedup by imPod.UID.
+	for i := 0; i < 5; i++ {
+		c.Assert(deletedNames(), HasLen, 0, Commentf("re-fire %d of same IM death must not re-kick", i))
+	}
+
+	// After the kick, the replacement pod-kick comes back fresh (started after
+	// the death). Even a genuinely new IM death (different UID, which bypasses
+	// dedup) must not kick the fresh replacement — the StartTime guard holds.
+	freshReplacement := mkPod("pod-kick", true, metav1.NewTime(now.Add(2*time.Second)))
+	_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), freshReplacement, metav1.CreateOptions{})
 	c.Assert(err, IsNil)
-	c.Assert(deletedNames(), HasLen, 0, Commentf("re-fire must not re-kick pods that came back fresh"))
+	imPod2 := imPod.DeepCopy()
+	imPod2.UID = "im-uid-2"
+	kubeClient.ClearActions()
+	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod2), IsNil)
+	got := []string{}
+	for _, a := range kubeClient.Actions() {
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
+			got = append(got, a.(ktesting.DeleteAction).GetName())
+		}
+	}
+	c.Assert(got, HasLen, 0, Commentf("a new IM death must not kick the fresh replacement pod"))
 
 	// A live (non-deleting) IM pod is always a no-op.
 	kubeClient.ClearActions()
 	livePod := imPod.DeepCopy()
+	livePod.UID = "im-uid-live"
 	livePod.DeletionTimestamp = nil
 	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(livePod), IsNil)
 	c.Assert(kubeClient.Actions(), HasLen, 0)
