@@ -401,8 +401,26 @@ func (kc *KubernetesPodController) handleWorkloadPodDeletionIfInstanceManagerPod
 			if !pod.DeletionTimestamp.IsZero() {
 				continue
 			}
-			if pod.CreationTimestamp.After(imPod.DeletionTimestamp.Time) {
-				_log.Debugf("%s. Workload pod was created after the instance manager pod deletion", logSkip)
+			// Gate on the volume's own remount request, not the instance
+			// manager pod's deletion timestamp. The IM pod name is
+			// deterministic, so it is recreated and can be deleted again as
+			// the replacement settles; keying off imPod.DeletionTimestamp
+			// (which advances each cycle) re-kicks workload pods that already
+			// came back healthy. RemountRequestedAt is set once when the
+			// volume detaches unexpectedly, so a pod that started after it has
+			// a fresh mount and must never be kicked again — idempotent no
+			// matter how many times this handler fires.
+			if volume.Status.RemountRequestedAt == "" {
+				_log.Debugf("%s. Volume has no pending remount request", logSkip)
+				continue
+			}
+			remountRequestedAt, parseErr := util.ParseTimeZ(volume.Status.RemountRequestedAt)
+			if parseErr != nil {
+				_log.WithError(parseErr).Warnf("%s. Failed to parse RemountRequestedAt %v", logSkip, volume.Status.RemountRequestedAt)
+				continue
+			}
+			if pod.Status.StartTime == nil || pod.Status.StartTime.Time.After(remountRequestedAt) {
+				_log.Debugf("%s. Workload pod started after the remount request; its mount is fresh", logSkip)
 				continue
 			}
 			// Only delete pods a controller will recreate.

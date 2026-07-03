@@ -490,12 +490,17 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	kc, err := newTestKubernetesPodController(lhClient, kubeClient, extensionsClient, informerFactories, TestNode1)
 	c.Assert(err, IsNil)
 
-	now := metav1.NewTime(time.Now().UTC())
+	now := time.Now().UTC()
+	imDeletion := metav1.NewTime(now)
+	remountAt := now.Add(-10 * time.Second).UTC().Format(time.RFC3339) // volume detached before the pod-recreate
+	staleStart := metav1.NewTime(now.Add(-5 * time.Minute))            // pod running well before the remount -> stale
+	freshStart := metav1.NewTime(now)                                  // pod started at/after remount -> fresh, must NOT be kicked
+
 	imPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "instance-manager-deadbeef",
 			Namespace:         TestNamespace,
-			DeletionTimestamp: &now,
+			DeletionTimestamp: &imDeletion,
 			Labels: map[string]string{
 				types.GetLonghornLabelComponentKey():                     types.LonghornLabelInstanceManager,
 				types.GetLonghornLabelKey(types.LonghornLabelDataEngine): string(longhorn.DataEngineTypeV2),
@@ -505,26 +510,24 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	}
 	c.Assert(isV2InstanceManagerPod(imPod), Equals, true)
 
-	mkVol := func(name string, engine longhorn.DataEngineType, node, podName string) *longhorn.Volume {
+	mkVol := func(name string, engine longhorn.DataEngineType, node, podName, remount string) *longhorn.Volume {
 		v := newVolume(name, 1)
 		v.Namespace = TestNamespace
 		v.Spec.DataEngine = engine
 		v.Spec.NodeID = node
 		v.Status.State = longhorn.VolumeStateAttached
+		v.Status.RemountRequestedAt = remount
 		v.Status.KubernetesStatus = longhorn.KubernetesStatus{
 			Namespace:       TestNamespace,
 			WorkloadsStatus: []longhorn.WorkloadStatus{{PodName: podName}},
 		}
 		return v
 	}
-	mkPod := func(name string, managed bool) *corev1.Pod {
+	mkPod := func(name string, managed bool, start metav1.Time) *corev1.Pod {
 		p := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              name,
-				Namespace:         TestNamespace,
-				CreationTimestamp: metav1.NewTime(now.Add(-time.Hour)),
-			},
-			Spec: corev1.PodSpec{NodeName: TestNode1},
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: TestNamespace},
+			Spec:       corev1.PodSpec{NodeName: TestNode1},
+			Status:     corev1.PodStatus{StartTime: &start},
 		}
 		if managed {
 			p.OwnerReferences = []metav1.OwnerReference{{
@@ -538,16 +541,20 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 	}
 
 	vols := []*longhorn.Volume{
-		mkVol("vol-kick", longhorn.DataEngineTypeV2, TestNode1, "pod-kick"),
-		mkVol("vol-bare", longhorn.DataEngineTypeV2, TestNode1, "pod-bare"),
-		mkVol("vol-other-node", longhorn.DataEngineTypeV2, TestNode2, "pod-other"),
-		mkVol("vol-v1", longhorn.DataEngineTypeV1, TestNode1, "pod-v1"),
+		mkVol("vol-kick", longhorn.DataEngineTypeV2, TestNode1, "pod-kick", remountAt),   // stale pod -> kick
+		mkVol("vol-fresh", longhorn.DataEngineTypeV2, TestNode1, "pod-fresh", remountAt), // fresh pod -> NO kick (idempotency)
+		mkVol("vol-noremount", longhorn.DataEngineTypeV2, TestNode1, "pod-nr", ""),       // no remount request -> NO kick
+		mkVol("vol-bare", longhorn.DataEngineTypeV2, TestNode1, "pod-bare", remountAt),   // bare pod -> NO kick
+		mkVol("vol-other", longhorn.DataEngineTypeV2, TestNode2, "pod-other", remountAt), // other node -> NO kick
+		mkVol("vol-v1", longhorn.DataEngineTypeV1, TestNode1, "pod-v1", remountAt),       // v1 -> NO kick
 	}
 	pods := []*corev1.Pod{
-		mkPod("pod-kick", true),
-		mkPod("pod-bare", false),
-		mkPod("pod-other", true),
-		mkPod("pod-v1", true),
+		mkPod("pod-kick", true, staleStart),
+		mkPod("pod-fresh", true, freshStart),
+		mkPod("pod-nr", true, staleStart),
+		mkPod("pod-bare", false, staleStart),
+		mkPod("pod-other", true, staleStart),
+		mkPod("pod-v1", true, staleStart),
 	}
 
 	autoDeleteSetting := newSetting(string(types.SettingNameAutoDeletePodWhenVolumeDetachedUnexpectedly), "true")
@@ -560,23 +567,33 @@ func (s *TestSuite) TestHandleWorkloadPodDeletionIfInstanceManagerPodIsDown(c *C
 		c.Assert(err, IsNil)
 	}
 	for _, p := range pods {
-		c.Assert(informerFactories.KubeInformerFactory.Core().V1().Pods().Informer().GetIndexer().Add(p), IsNil)
 		_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), p, metav1.CreateOptions{})
 		c.Assert(err, IsNil)
 	}
 
-	kubeClient.ClearActions()
-	c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod), IsNil)
-
-	deleted := []string{}
-	for _, a := range kubeClient.Actions() {
-		if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
-			deleted = append(deleted, a.(ktesting.DeleteAction).GetName())
+	deletedNames := func() []string {
+		kubeClient.ClearActions()
+		c.Assert(kc.handleWorkloadPodDeletionIfInstanceManagerPodIsDown(imPod), IsNil)
+		out := []string{}
+		for _, a := range kubeClient.Actions() {
+			if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
+				out = append(out, a.(ktesting.DeleteAction).GetName())
+			}
 		}
+		return out
 	}
-	c.Assert(deleted, DeepEquals, []string{"pod-kick"})
 
-	// A live (non-deleting) IM pod must be a no-op.
+	// First fire: only the stale, managed, same-node, v2, remount-pending pod.
+	c.Assert(deletedNames(), DeepEquals, []string{"pod-kick"})
+
+	// Idempotency (the observed quirk): re-firing must NOT kick the fresh pod
+	// nor re-kick anything. Simulate pod-kick having been recreated fresh.
+	freshKick := mkPod("pod-kick", true, metav1.NewTime(now.Add(time.Second)))
+	_, err = kubeClient.CoreV1().Pods(TestNamespace).Create(context.TODO(), freshKick, metav1.CreateOptions{})
+	c.Assert(err, IsNil)
+	c.Assert(deletedNames(), HasLen, 0, Commentf("re-fire must not re-kick pods that came back fresh"))
+
+	// A live (non-deleting) IM pod is always a no-op.
 	kubeClient.ClearActions()
 	livePod := imPod.DeepCopy()
 	livePod.DeletionTimestamp = nil
