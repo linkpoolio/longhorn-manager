@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +70,74 @@ const (
 	replicaTransportAckTimeout  = 10
 	replicaKeepAliveTimeoutMs   = 10000
 	replicaMultipath            = "disable"
+
+	// Rebuild-path bdev_nvme timeouts, applied to the clone/rebuild remote
+	// attaches in replica.go. Generous enough to ride out a slow-but-alive
+	// rebuild source without declaring it dead (the source is often the
+	// volume's only healthy replica, so a premature controller loss cascades
+	// into a faulted volume). Must respect SPDK's attach-time ordering
+	// reconnect_delay_sec <= fast_io_fail_timeout_sec <= ctrlr_loss_timeout_sec
+	// (rpc_bdev_nvme_attach_controller validation in bdev_nvme.c).
+	rebuildCtrlrLossTimeoutSec  = 30
+	rebuildReconnectDelaySec    = 5
+	rebuildFastIOFailTimeoutSec = 15
+
+	// replicaTransportTos tags outbound NVMe-oF packets with DSCP. SPDK passes
+	// this byte to rdma_set_option(RDMA_OPTION_ID_TOS), the raw 8-bit IPv4 TOS
+	// (DSCP in the upper 6 bits). DSCP 26 (AF31) = TOS 26<<2 = 104.
+	replicaTransportTos = 104
+
+	// iobuf pool sizes. SPDK defaults are too small once nvmf transports use a
+	// tuned num_shared_buffers; sized for that + accel/bdev channel caches.
+	// Applied via iobuf_set_options before framework_start_init (the IM
+	// entrypoint starts spdk_tgt with --wait-for-rpc).
+	iobufLargePoolCount uint64 = 4096
+	iobufSmallPoolCount uint64 = 8192
+
+	// accelMlx5MkeysPerCore is the per-core scaling factor for accel_mlx5's mkey
+	// pool. SPDK enforces a minimum of ACCEL_MLX5_MAX_MKEYS_IN_TASK(16) per core;
+	// the upstream 2047 total can ENOMEM on ConnectX firmware that advertises
+	// crc32c but can't back that many PSVs. 64/core scales with the pinned cores.
+	accelMlx5MkeysPerCore uint32 = 64
 )
+
+// accelMlx5NumRequests sizes the per-device mkey pool for the accel_mlx5 scan.
+// SPDK enforces num_requests/cores >= ACCEL_MLX5_MAX_MKEYS_IN_TASK(16), where
+// "cores" is spdk_env_get_core_count() (the SPDK cpumask's bit count). The IM
+// wrapper exports LONGHORN_V2_SPDK_CPUMASK; we count its bits.
+func accelMlx5NumRequests() uint32 {
+	return uint32(spdkCoreCount()) * accelMlx5MkeysPerCore
+}
+
+// spdkCoreCount counts bits in LONGHORN_V2_SPDK_CPUMASK (set by the IM wrapper
+// from --spdk-cpumask), matching spdk_env_get_core_count() inside spdk_tgt. Hex,
+// optionally 0x-prefixed. Falls back to runtime.NumCPU() when unset.
+func spdkCoreCount() int {
+	mask := strings.TrimSpace(os.Getenv("LONGHORN_V2_SPDK_CPUMASK"))
+	if mask == "" {
+		c := runtime.NumCPU()
+		if c < 1 {
+			c = 1
+		}
+		return c
+	}
+	mask = strings.TrimPrefix(strings.TrimPrefix(mask, "0x"), "0X")
+	v, err := strconv.ParseUint(mask, 16, 64)
+	if err != nil || v == 0 {
+		c := runtime.NumCPU()
+		if c < 1 {
+			c = 1
+		}
+		return c
+	}
+	count := 0
+	for ; v != 0; v >>= 1 {
+		if v&1 == 1 {
+			count++
+		}
+	}
+	return count
+}
 
 var (
 	// ErrEngineFrontendCreateInvalidArgument indicates the create request carries
@@ -429,4 +498,54 @@ func getEngineCntlid(engineName string) uint16 {
 		}
 	}
 	return 1 // fallback
+}
+
+// CNTLID range allocation for an engine's NVMe-oF subsystem.
+//
+// SPDK enforces (maxCntlid - minCntlid + 1) as the maximum number of
+// controllers a subsystem may hold at once. A subsystem must have room for the
+// one live host plus the controllers that transiently pile up while a kernel
+// initiator reconnects: it retries every --reconnect-delay seconds while a
+// stale controller is only reaped on keep-alive timeout. If the window is too
+// small a recoverable disconnect becomes a permanent wedge — SPDK logs
+// "Reached max simultaneous ctrlrs" and every subsequent connect is rejected —
+// so each window is deliberately large.
+//
+// At most two targets expose the same NQN simultaneously: the two sides of a
+// live migration / engine upgrade. GenerateEngineNameForVolume increments the
+// engine ordinal on every replacement, so those two targets always carry
+// *consecutive* ordinals. Mapping each ordinal to a distinct window
+// (ordinal mod cntlidWindowSlots, which must be >= 2) guarantees the two
+// concurrent targets never share a cntlid. Every window starts at
+// cntlidRangeBase, above the legacy pre-windowing scheme (cntlid..cntlid+3,
+// near 1), so a rolling upgrade from an old binary stays disjoint as well.
+//
+// Bounds check: the highest window is cntlidRangeBase + (cntlidWindowSlots-1)*
+// cntlidWindowSize + cntlidWindowSize = 1000 + 3*16000 + 16000 = 65000, within
+// the uint16 / SPDK valid cntlid space (<= 0xffef).
+const (
+	cntlidRangeBase   uint16 = 1000
+	cntlidWindowSize  uint16 = 16000
+	cntlidWindowSlots uint16 = 4
+)
+
+func getEngineCntlidRange(engineName string) (uint16, uint16) {
+	slot := (getEngineCntlid(engineName) - 1) % cntlidWindowSlots
+	lo := cntlidRangeBase + slot*cntlidWindowSize + 1
+	return lo, lo + cntlidWindowSize - 1
+}
+
+// envIntOrDefault reads an integer tunable from the environment, falling back
+// to def when unset, empty, or unparseable. Used by the transport/SPDK opts
+// tuning so operators can override defaults per IM pod without a rebuild.
+func envIntOrDefault(name string, def int) int {
+	raw, ok := os.LookupEnv(name)
+	if !ok || raw == "" {
+		return def
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return def
+	}
+	return v
 }
