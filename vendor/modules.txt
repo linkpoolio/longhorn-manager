@@ -323,7 +323,7 @@ github.com/longhorn/longhorn-engine/pkg/meta
 github.com/longhorn/longhorn-engine/pkg/replica/client
 github.com/longhorn/longhorn-engine/pkg/types
 github.com/longhorn/longhorn-engine/pkg/util
-# github.com/longhorn/longhorn-instance-manager v1.13.0-dev-20260531.0.20260610073602-18980f82144c => github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706120749-f40d43171ec5
+# github.com/longhorn/longhorn-instance-manager v1.13.0-dev-20260531.0.20260610073602-18980f82144c => github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706123158-2d7199e870cd
 ## explicit; go 1.26.0
 github.com/longhorn/longhorn-instance-manager/pkg/api
 github.com/longhorn/longhorn-instance-manager/pkg/client
@@ -334,7 +334,7 @@ github.com/longhorn/longhorn-instance-manager/pkg/util
 ## explicit; go 1.26.0
 github.com/longhorn/longhorn-share-manager/pkg/client
 github.com/longhorn/longhorn-share-manager/pkg/types
-# github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260614.0.20260618083513-3367e7cd2b7b => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706100044-2a3a569e91ff
+# github.com/longhorn/longhorn-spdk-engine v1.13.0-dev-20260614.0.20260618083513-3367e7cd2b7b => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706123113-e48dda203a8f
 ## explicit; go 1.26.0
 github.com/longhorn/longhorn-spdk-engine/pkg/api
 github.com/longhorn/longhorn-spdk-engine/pkg/client
@@ -1404,6 +1404,6 @@ sigs.k8s.io/yaml/kyaml
 # k8s.io/sample-controller => k8s.io/sample-controller v0.36.1
 # github.com/longhorn/go-spdk-helper => github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260706091300-79ed23481fc1
 # github.com/longhorn/types => github.com/linkpoolio/types v0.0.0-20260610135513-3130d10db443
-# github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706100044-2a3a569e91ff
+# github.com/longhorn/longhorn-spdk-engine => github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706123113-e48dda203a8f
 # github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
-# github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706120749-f40d43171ec5
+# github.com/longhorn/longhorn-instance-manager => github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706123158-2d7199e870cd

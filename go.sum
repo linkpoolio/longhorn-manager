@@ -170,10 +170,10 @@ github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080 h1:LOwjt
 github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080/go.mod h1:+aXFI8DmHTX4Az9pZF16/XKfrVKWIESJjw+hcxdMslw=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260706091300-79ed23481fc1 h1:qTuXNaECnQLVx2PSOVfUO1yOFXe6LcPG7c265xa4B+E=
 github.com/linkpoolio/go-spdk-helper v0.6.1-0.20260706091300-79ed23481fc1/go.mod h1:ZI7l/NHH7z6NmGed4ahQBnmKl46QPit1NnKTgQrW7D8=
-github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706120749-f40d43171ec5 h1:0TE7znE/fc+R3s6DXlBBk+D5vka35Ip5ujly8NR2KpE=
-github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706120749-f40d43171ec5/go.mod h1:DTbfUV6U3syjsl4S+8i/sl7Kuear0d0D37tOHiIudMY=
-github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706100044-2a3a569e91ff h1:o0OL9vCzqFromW91hXMZp1x4LZ4Pkfko2Tb4hAl3tHU=
-github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706100044-2a3a569e91ff/go.mod h1:oof48zV7Y77CCquH+blunKu+B2pEm+XWCoNQHiRceRU=
+github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706123158-2d7199e870cd h1:HRP+skXqv11q1McBct7v6IzAMeKVcHQwy+8LndJcejs=
+github.com/linkpoolio/longhorn-instance-manager v1.13.0-dev-20260614.0.20260706123158-2d7199e870cd/go.mod h1:9lcvZpJM6KF9t4TG4AN9LgvHXfWwcjIZY7ohI+67KcY=
+github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706123113-e48dda203a8f h1:1UJ8zLuiecAg/S3tGuWlT3RuWLN5UQKG/FfWRXpW5V8=
+github.com/linkpoolio/longhorn-spdk-engine v0.0.0-20260706123113-e48dda203a8f/go.mod h1:oof48zV7Y77CCquH+blunKu+B2pEm+XWCoNQHiRceRU=
 github.com/linkpoolio/types v0.0.0-20260610135513-3130d10db443 h1:l8KgeG4OcrCiN7TmZV5grV7QDUt5wcF1mh8ng+X2C8M=
 github.com/linkpoolio/types v0.0.0-20260610135513-3130d10db443/go.mod h1:F84Y4B+3GyEcjr9EbwdI3RgOzT8nm2EqHxqyTWkCfRE=
 github.com/longhorn/backing-image-manager v1.12.0-dev-20260503 h1:DXBaexlHBBolM2P0XoAE7uSpQNOm2T4lBOij0dhQ6EQ=
