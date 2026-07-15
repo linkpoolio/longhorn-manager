@@ -580,13 +580,10 @@ func (imc *InstanceManagerController) isDateEngineCPUMaskCoreNumberApplied(im *l
 		return im.Status.DataEngineStatus.V2.CPUCoreNumber == spdkCoreNumber, nil
 	}
 
-	if im.Spec.DataEngineSpec.V2.CPUMask != "" {
-		return im.Spec.DataEngineSpec.V2.CPUMask == im.Status.DataEngineStatus.V2.CPUMask, nil
-	}
-
-	value, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
+	// Fall back to the effective CPU mask (spec > node label > cluster setting).
+	value, err := imc.getEffectiveSpdkCPUMask(im)
 	if err != nil {
-		return true, errors.Wrapf(err, "failed to get %v setting for updating data engine CPU mask", types.SettingNameDataEngineCPUMask)
+		return true, errors.Wrapf(err, "failed to resolve effective data engine CPU mask")
 	}
 
 	return value == im.Status.DataEngineStatus.V2.CPUMask, nil
@@ -684,6 +681,12 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 		log.WithError(err).Warnf("Failed to check hugepage setting applied state for instance manager pod %v", im.Name)
 	}
 
+	hostNetworkSynced, err := imc.isHostNetworkSynced(im)
+	if err != nil {
+		log.WithError(err).Warnf("Failed to check hostNetwork sync for instance manager pod %v, will skip hostNetwork check", im.Name)
+		hostNetworkSynced = true
+	}
+
 	isSettingSynced, unSyncedSettings, isPodDeletedOrNotRunning, areInstancesRunningInPod, err := imc.areDangerZoneSettingsSyncedToIMPod(im)
 	if err != nil {
 		return err
@@ -708,7 +711,7 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 			longhorn.ConditionStatusFalse, longhorn.InstanceManagerConditionReasonSettingNotSynced, fmt.Sprintf("Settings %v are not synced", unSyncedSettings))
 	}
 
-	isPodDeletionNotRequired := (isSettingSynced && dataEngineCPUMaskIsApplied && hugepageSettingApplied) || areInstancesRunningInPod || isPodDeletedOrNotRunning
+	isPodDeletionNotRequired := (isSettingSynced && dataEngineCPUMaskIsApplied && hugepageSettingApplied && hostNetworkSynced) || areInstancesRunningInPod || isPodDeletedOrNotRunning
 	if im.Status.CurrentState != longhorn.InstanceManagerStateError &&
 		im.Status.CurrentState != longhorn.InstanceManagerStateStopped &&
 		isPodDeletionNotRequired {
@@ -719,7 +722,7 @@ func (imc *InstanceManagerController) handlePod(im *longhorn.InstanceManager) er
 		log.Warnf("Instance manager pod %v is deleted or not running, recreating the pod", im.Name)
 	} else {
 		log.Warnf("Deleting instance manager pod %v because some danger zone settings are not synced since no instances are running and the following conditions are met: "+
-			"setting is not synced (%v) or data engine CPU mask is not applied (%v) or hugepage setting is not applied (%v)", im.Name, !isSettingSynced, !dataEngineCPUMaskIsApplied, !hugepageSettingApplied)
+			"setting is not synced (%v) or data engine CPU mask is not applied (%v) or hugepage setting is not applied (%v) or host network is not synced (%v)", im.Name, !isSettingSynced, !dataEngineCPUMaskIsApplied, !hugepageSettingApplied, !hostNetworkSynced)
 	}
 
 	if err := imc.cleanupInstanceManagerPod(im.Name); err != nil {
@@ -1122,9 +1125,9 @@ func (imc *InstanceManagerController) isSettingHugepageLimitSynced(im *longhorn.
 		return false, err
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
-		return false, err
+		return false, errors.Wrapf(err, "failed to resolve effective SPDK memory size")
 	}
 
 	if len(pod.Spec.Containers) == 0 {
@@ -1146,14 +1149,115 @@ func (imc *InstanceManagerController) isSettingHugepageLimitSynced(im *longhorn.
 
 // isSettingMemorySizeArgSynced checks whether the pod's --spdk-memory-size argument
 // matches the current memory-size setting value.
+func (imc *InstanceManagerController) getEffectiveSpdkInterruptMode(im *longhorn.InstanceManager) (string, error) {
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if kubeNode.Labels[types.NodeNvmfTransportLabelKey] == types.NodeNvmfTransportLabelValueRDMA {
+			return "false", nil
+		}
+		if v, ok := kubeNode.Labels[types.NodeSpdkInterruptModeLabelKey]; ok {
+			switch v {
+			case "true", "false":
+				return v, nil
+			}
+		}
+	}
+	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineInterruptModeEnabled, im.Spec.DataEngine)
+}
+
+// getEffectiveSpdkCPUMask resolves the SPDK reactor CPU mask for a v2
+// InstanceManager. Precedence (highest first):
+//  1. im.Spec.DataEngineSpec.V2.CPUMask (per-IM override, upstream mechanism).
+//  2. node.longhorn.io/spdk-cpu-mask label on the kube node (hex string, e.g. "0xFF").
+//  3. The cluster-wide data-engine-cpu-mask Setting.
+
+func (imc *InstanceManagerController) getEffectiveSpdkCPUMask(im *longhorn.InstanceManager) (string, error) {
+	if im.Spec.DataEngineSpec.V2.CPUMask != "" {
+		return im.Spec.DataEngineSpec.V2.CPUMask, nil
+	}
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if v, ok := kubeNode.Labels[types.NodeSpdkCPUMaskLabelKey]; ok && v != "" {
+			return v, nil
+		}
+	}
+	return imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, im.Spec.DataEngine)
+}
+
+// getEffectiveHostNetwork resolves whether the IM pod for this InstanceManager
+// should run with hostNetwork enabled, mirroring the decision
+// createInstanceManagerPodSpec makes: v2 IMs on nodes labelled
+// node.longhorn.io/nvmf-transport=rdma run on the host network so SPDK can
+// bind RDMA listeners to the node's RoCE-capable interface.
+
+func (imc *InstanceManagerController) getEffectiveHostNetwork(im *longhorn.InstanceManager) (bool, error) {
+	if types.IsDataEngineV1(im.Spec.DataEngine) {
+		return false, nil
+	}
+	kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID)
+	if err != nil {
+		return false, errors.Wrapf(err, "failed to get kubernetes node %v for host network check", im.Spec.NodeID)
+	}
+	return kubeNode != nil && kubeNode.Labels[types.NodeNvmfTransportLabelKey] == types.NodeNvmfTransportLabelValueRDMA, nil
+}
+
+// isHostNetworkSynced checks whether the IM pod's hostNetwork setting matches
+// the effective desired value derived from the nvmf-transport node label.
+// Without this check, applying (or removing) the label after the pod exists
+// never converges: a fresh RDMA node whose IM pod was created before the label
+// was applied silently keeps serving over TCP forever. Like the other
+// danger-zone checks, an out-of-sync result only triggers pod deletion via
+// handlePod when no instances are running in the pod.
+
+func (imc *InstanceManagerController) isHostNetworkSynced(im *longhorn.InstanceManager) (bool, error) {
+	if types.IsDataEngineV1(im.Spec.DataEngine) {
+		return true, nil
+	}
+
+	if im.Status.CurrentState != longhorn.InstanceManagerStateRunning {
+		return true, nil
+	}
+
+	pod, err := imc.ds.GetPodRO(im.Namespace, im.Name)
+	if err != nil {
+		// Fail safe: keep the pod when the state cannot be verified.
+		return true, errors.Wrapf(err, "cannot get pod for instance manager %v", im.Name)
+	}
+	if pod == nil {
+		return true, nil
+	}
+
+	desiredHostNetwork, err := imc.getEffectiveHostNetwork(im)
+	if err != nil {
+		// Fail safe: keep the pod when the state cannot be verified.
+		return true, err
+	}
+
+	return pod.Spec.HostNetwork == desiredHostNetwork, nil
+}
+
+// getEffectiveSpdkMemorySize resolves the SPDK hugepage budget (in MiB) for
+// a v2 InstanceManager. Precedence (highest first):
+//  1. node.longhorn.io/spdk-memory-size label on the kube node (decimal MiB).
+//  2. The cluster-wide data-engine-memory-size Setting.
+
+func (imc *InstanceManagerController) getEffectiveSpdkMemorySize(im *longhorn.InstanceManager) (int64, error) {
+	if kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID); err == nil && kubeNode != nil {
+		if v, ok := kubeNode.Labels[types.NodeSpdkMemorySizeLabelKey]; ok && v != "" {
+			if parsed, perr := strconv.ParseInt(strings.TrimSpace(v), 10, 64); perr == nil && parsed > 0 {
+				return parsed, nil
+			}
+		}
+	}
+	return imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+}
+
 func (imc *InstanceManagerController) isSettingMemorySizeArgSynced(im *longhorn.InstanceManager, pod *corev1.Pod) (bool, error) {
 	if types.IsDataEngineV1(im.Spec.DataEngine) {
 		return true, nil
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
-		return false, err
+		return false, errors.Wrapf(err, "failed to resolve effective SPDK memory size")
 	}
 
 	if len(pod.Spec.Containers) == 0 {
@@ -1184,9 +1288,9 @@ func (imc *InstanceManagerController) nodeHasEnoughHugepageTotalCapacity(im *lon
 		return true, nil
 	}
 
-	memorySize, err := imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+	memorySize, err := imc.getEffectiveSpdkMemorySize(im)
 	if err != nil {
-		return false, err
+		return false, errors.Wrapf(err, "failed to resolve effective SPDK memory size")
 	}
 
 	kubeNode, err := imc.ds.GetKubernetesNodeRO(im.Spec.NodeID)
@@ -1982,20 +2086,16 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 		}
 		dynamicCPUPinningEnabled := spdkCoreNumber != 0
 
-		// CPU mask is required for SPDK.
+		// CPU mask is required for SPDK when dynamic CPU-manager pinning is off.
+		// Effective mask: IM spec > node.longhorn.io/spdk-cpu-mask > cluster setting.
 		cpuMask := ""
 		if !dynamicCPUPinningEnabled {
-			cpuMask = im.Spec.DataEngineSpec.V2.CPUMask
+			cpuMask, err = imc.getEffectiveSpdkCPUMask(im)
+			if err != nil {
+				return nil, err
+			}
 			if cpuMask == "" {
-				value, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineCPUMask, dataEngine)
-				if err != nil {
-					return nil, err
-				}
-
-				cpuMask = value
-				if cpuMask == "" {
-					return nil, fmt.Errorf("failed to get CPU mask setting for data engine %v", dataEngine)
-				}
+				return nil, fmt.Errorf("failed to get CPU mask setting for data engine %v", dataEngine)
 			}
 		}
 		// When CPU-manager-based pinning is enabled, SPDK CPUs are determined at runtime inside the IM pod (cpuMask may be empty here).
@@ -2008,8 +2108,7 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			return nil, err
 		}
 
-		memory := int64(0)
-		memory, err = imc.ds.GetSettingAsIntByDataEngine(types.SettingNameDataEngineMemorySize, im.Spec.DataEngine)
+		memory, err := imc.getEffectiveSpdkMemorySize(im)
 		if err != nil {
 			return nil, err
 		}
@@ -2054,7 +2153,7 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			"--spdk-enabled",
 			"--listen", fmt.Sprintf("0.0.0.0:%d", engineapi.InstanceManagerProcessManagerServiceDefaultPort))
 
-		interruptMode, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineInterruptModeEnabled, dataEngine)
+		interruptMode, err := imc.getEffectiveSpdkInterruptMode(im)
 		if err != nil {
 			return nil, err
 		}
@@ -2081,6 +2180,18 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 		}
 
 		imc.logger.Infof("Creating instance manager pod %v with args %+v", podSpec.Name, args)
+
+		// RDMA listeners can only bind to IPs assigned to the RoCE device; pod-network
+		// IPs fail rdma_bind_addr(). Opt v2 IMs on RDMA-labelled nodes into hostNetwork
+		// (and DNSClusterFirstWithHostNet) so the listeners bind on the host.
+		hostNet, err := imc.getEffectiveHostNetwork(im)
+		if err != nil {
+			return nil, err
+		}
+		if hostNet {
+			podSpec.Spec.HostNetwork = true
+			podSpec.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
+		}
 
 		podSpec.Spec.Containers[0].Args = args
 
@@ -2259,19 +2370,38 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 	}
 
 	if types.IsDataEngineV2(dataEngine) {
-		podSpec.Spec.Containers[0].VolumeMounts = append(podSpec.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
-			MountPath: "/hugepages",
-			Name:      "hugepage",
-		})
+		podSpec.Spec.Containers[0].VolumeMounts = append(podSpec.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{
+				MountPath: "/hugepages",
+				Name:      "hugepage",
+			},
+			corev1.VolumeMount{
+				// libibverbs hardcodes /dev/infiniband — an empty dir on non-RDMA
+				// nodes simply makes SPDK's nvmf_create_transport(rdma) fail.
+				MountPath: "/dev/infiniband",
+				Name:      "dev-infiniband",
+			},
+		)
 
-		podSpec.Spec.Volumes = append(podSpec.Spec.Volumes, corev1.Volume{
-			Name: "hugepage",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{
-					Medium: corev1.StorageMediumHugePages,
+		podSpec.Spec.Volumes = append(podSpec.Spec.Volumes,
+			corev1.Volume{
+				Name: "hugepage",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{
+						Medium: corev1.StorageMediumHugePages,
+					},
 				},
 			},
-		})
+			corev1.Volume{
+				Name: "dev-infiniband",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/dev/infiniband",
+						Type: &[]corev1.HostPathType{corev1.HostPathDirectoryOrCreate}[0],
+					},
+				},
+			},
+		)
 	}
 	types.AddGoCoverDirToPod(podSpec)
 
