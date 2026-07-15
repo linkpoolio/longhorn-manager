@@ -1036,6 +1036,10 @@ func (m *EngineFrontendMonitor) refresh(ef *longhorn.EngineFrontend) (err error)
 	if err != nil {
 		return errors.Wrapf(err, "failed to get current engine for volume %v during engine frontend monitoring", ef.Spec.VolumeName)
 	}
+	if currentEngine == nil {
+		m.logger.WithField("volume", ef.Spec.VolumeName).Warn("Skip engine frontend monitoring because the current engine no longer exists")
+		return nil
+	}
 
 	engineForFrontend := currentEngine
 	if ef.Spec.EngineName != "" && ef.Spec.EngineName != currentEngine.Name {

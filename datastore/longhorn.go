@@ -1968,6 +1968,11 @@ func (s *DataStore) GetVolumeCurrentEngine(volumeName string) (*longhorn.Engine,
 	if err != nil {
 		return nil, err
 	}
+	if e == nil {
+		// PickVolumeCurrentEngine returns (nil, nil) when the volume has
+		// no Engine CRs, so callers must handle a nil engine with a nil error.
+		return nil, nil
+	}
 	return e.DeepCopy(), nil
 }
 

@@ -347,6 +347,19 @@ func (h *InstanceHandler) ReconcileInstanceState(obj interface{}, spec *longhorn
 			if !datastore.ErrorIsNotFound(err) {
 				return err
 			}
+			// The referenced instance manager CR no longer exists (deleted with
+			// its node or replaced by an image change). For an instance that
+			// was running, the stale name is deliberately kept alongside the
+			// unknown state for the fault path. For a stopped instance wanting
+			// a (re)start, the stale reference only wedges it: downstream
+			// lookups (createInstance -> GetInstance) trust
+			// status.InstanceManagerName verbatim and fail this sync with a
+			// not-found error forever, before any later status sync could
+			// clear it. Release it so the instance resolves a live manager.
+			if !status.Started {
+				log.Warnf("Instance manager %v referenced by the non-started instance %v no longer exists; releasing the stale reference", status.InstanceManagerName, instanceName)
+				status.InstanceManagerName = ""
+			}
 		}
 	}
 	// There should be an available instance manager for a scheduled instance when its related engine image is compatible
