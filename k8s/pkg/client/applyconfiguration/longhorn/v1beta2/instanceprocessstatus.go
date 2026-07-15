@@ -35,6 +35,8 @@ type InstanceProcessStatusApplyConfiguration struct {
 	Listen          *string                                       `json:"listen,omitempty"`
 	PortEnd         *int32                                        `json:"portEnd,omitempty"`
 	PortStart       *int32                                        `json:"portStart,omitempty"`
+	TcpPort         *int32                                        `json:"tcpPort,omitempty"`
+	RdmaPort        *int32                                        `json:"rdmaPort,omitempty"`
 	TargetPortEnd   *int32                                        `json:"targetPortEnd,omitempty"`
 	TargetPortStart *int32                                        `json:"targetPortStart,omitempty"`
 	State           *longhornv1beta2.InstanceState                `json:"state,omitempty"`
@@ -138,6 +140,22 @@ func (b *InstanceProcessStatusApplyConfiguration) WithPortEnd(value int32) *Inst
 // If called multiple times, the PortStart field is set to the value of the last call.
 func (b *InstanceProcessStatusApplyConfiguration) WithPortStart(value int32) *InstanceProcessStatusApplyConfiguration {
 	b.PortStart = &value
+	return b
+}
+
+// WithTcpPort sets the TcpPort field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the TcpPort field is set to the value of the last call.
+func (b *InstanceProcessStatusApplyConfiguration) WithTcpPort(value int32) *InstanceProcessStatusApplyConfiguration {
+	b.TcpPort = &value
+	return b
+}
+
+// WithRdmaPort sets the RdmaPort field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the RdmaPort field is set to the value of the last call.
+func (b *InstanceProcessStatusApplyConfiguration) WithRdmaPort(value int32) *InstanceProcessStatusApplyConfiguration {
+	b.RdmaPort = &value
 	return b
 }
 

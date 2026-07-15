@@ -74,6 +74,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -95,6 +97,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -111,6 +115,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 			status.IP = ""
 			status.StorageIP = ""
 			status.Port = 0
+			status.TcpPort = 0
+			status.RdmaPort = 0
 			status.UblkID = 0
 			status.UUID = ""
 			h.resetInstanceErrorCondition(status)
@@ -132,6 +138,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -156,6 +164,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -192,6 +202,12 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 				log.Warnf("Instance %v is state running in instance manager %s, but its status Port %d does not match the instance manager recorded Port %d", instanceName, im.Name, status.Port, instance.Status.PortStart)
 			}
 			status.Port = int(instance.Status.PortStart)
+		}
+		if status.TcpPort != int(instance.Status.TcpPort) {
+			status.TcpPort = int(instance.Status.TcpPort)
+		}
+		if status.RdmaPort != int(instance.Status.RdmaPort) {
+			status.RdmaPort = int(instance.Status.RdmaPort)
 		}
 		if status.UblkID != instance.Status.UblkID {
 			status.UblkID = instance.Status.UblkID
@@ -265,6 +281,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -278,6 +296,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)
@@ -290,6 +310,8 @@ func (h *InstanceHandler) syncStatusWithInstanceManager(log *logrus.Entry, im *l
 		status.IP = ""
 		status.StorageIP = ""
 		status.Port = 0
+		status.TcpPort = 0
+		status.RdmaPort = 0
 		status.UblkID = 0
 		status.UUID = ""
 		h.resetInstanceErrorCondition(status)

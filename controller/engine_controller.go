@@ -364,9 +364,11 @@ func (ec *EngineController) syncEngine(key string) (err error) {
 	} else if len(engine.Spec.UpgradedReplicaAddressMap) == 0 {
 		syncReplicaAddressMap = true
 	}
-	if syncReplicaAddressMap && !reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) {
+	if syncReplicaAddressMap && (!reflect.DeepEqual(engine.Status.CurrentReplicaAddressMap, engine.Spec.ReplicaAddressMap) ||
+		!reflect.DeepEqual(engine.Status.CurrentReplicaTransportAddressMap, engine.Spec.ReplicaTransportAddressMap)) {
 		log.Infof("Updating engine current replica address map to %+v", engine.Spec.ReplicaAddressMap)
 		engine.Status.CurrentReplicaAddressMap = engine.Spec.ReplicaAddressMap
+		engine.Status.CurrentReplicaTransportAddressMap = engine.Spec.ReplicaTransportAddressMap
 		// Make sure the CurrentReplicaAddressMap persist in the etcd before continue
 		return nil
 	}
@@ -2690,6 +2692,9 @@ func (ec *EngineController) Upgrade(e *longhorn.Engine, log *logrus.Entry) (err 
 	log.Infof("Engine has been upgraded from %v to %v", e.Status.CurrentImage, e.Spec.Image)
 	e.Status.CurrentImage = e.Spec.Image
 	e.Status.CurrentReplicaAddressMap = e.Spec.UpgradedReplicaAddressMap
+	// Clear the transport map: it mirrors the pre-upgrade replicas' per-replica
+	// ports, and a v2 live upgrade must rebuild it for the new replicas.
+	e.Status.CurrentReplicaTransportAddressMap = nil
 	// reset ReplicaModeMap to reflect the new replicas
 	e.Status.ReplicaModeMap = nil
 	e.Status.ReplicaTransitionTimeMap = nil
