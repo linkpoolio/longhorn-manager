@@ -280,6 +280,8 @@ const (
 	EnvTZ             = "TZ"
 	EnvDistro         = "LONGHORN_DISTRO"
 
+	EnvV2LvstoreMdPagesPerClusterRatio = "LONGHORN_V2_LVSTORE_MD_PAGES_PER_CLUSTER_RATIO"
+
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"
 	BackupStoreTypeNFS    = "nfs"
