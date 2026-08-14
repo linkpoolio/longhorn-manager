@@ -160,6 +160,7 @@ const (
 	SettingNameDataEngineLogLevel                                       = SettingName("data-engine-log-level")
 	SettingNameDataEngineLogFlags                                       = SettingName("data-engine-log-flags")
 	SettingNameDataEngineInterruptModeEnabled                           = SettingName("data-engine-interrupt-mode-enabled")
+	SettingNameDataEngineLvstoreMdPagesPerClusterRatio                  = SettingName("data-engine-lvstore-md-pages-per-cluster-ratio")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -284,6 +285,7 @@ var (
 		SettingNameDataEngineLogFlags,
 		SettingNameSnapshotDataIntegrity,
 		SettingNameDataEngineInterruptModeEnabled,
+		SettingNameDataEngineLvstoreMdPagesPerClusterRatio,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -446,6 +448,7 @@ var (
 		SettingNameDataEngineLogLevel:                                       SettingDefinitionDataEngineLogLevel,
 		SettingNameDataEngineLogFlags:                                       SettingDefinitionDataEngineLogFlags,
 		SettingNameDataEngineInterruptModeEnabled:                           SettingDefinitionDataEngineInterruptModeEnabled,
+		SettingNameDataEngineLvstoreMdPagesPerClusterRatio:                  SettingDefinitionDataEngineLvstoreMdPagesPerClusterRatio,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1883,6 +1886,23 @@ var (
 		ReadOnly:           false,
 		DataEngineSpecific: true,
 		Default:            fmt.Sprintf("{%q:\"\"}", longhorn.DataEngineTypeV2),
+	}
+
+	SettingDefinitionDataEngineLvstoreMdPagesPerClusterRatio = SettingDefinition{
+		DisplayName: "Lvstore Metadata Pages Per Cluster Ratio",
+		Description: "Applies only to the V2 Data Engine. SPDK num_md_pages_per_cluster_ratio reserved at " +
+			"lvstore creation. 100 is one metadata page per cluster. Create-time only: existing Disks keep " +
+			"the ratio they were created with.",
+		Category:           SettingCategoryGeneral,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"100\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 100,
+			ValueIntRangeMaximum: 10000,
+		},
 	}
 
 	SettingDefinitionReplicaRebuildingBandwidthLimit = SettingDefinition{

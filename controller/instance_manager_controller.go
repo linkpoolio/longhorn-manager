@@ -2135,6 +2135,18 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 			Value: tz,
 		})
 	}
+	if types.IsDataEngineV2(dataEngine) {
+		ratio, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineLvstoreMdPagesPerClusterRatio, dataEngine)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get %v setting", types.SettingNameDataEngineLvstoreMdPagesPerClusterRatio)
+		}
+		if ratio != "" {
+			podEnv = append(podEnv, corev1.EnvVar{
+				Name:  types.EnvV2LvstoreMdPagesPerClusterRatio,
+				Value: ratio,
+			})
+		}
+	}
 	podSpec.Spec.Containers[0].Env = podEnv
 
 	// Set volume mounts
