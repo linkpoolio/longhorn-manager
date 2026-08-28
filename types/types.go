@@ -281,6 +281,7 @@ const (
 	EnvDistro         = "LONGHORN_DISTRO"
 
 	EnvV2LvstoreMdPagesPerClusterRatio = "LONGHORN_V2_LVSTORE_MD_PAGES_PER_CLUSTER_RATIO"
+	EnvV2RdmaPriorityClass             = "LONGHORN_V2_RDMA_PRIORITY_CLASS"
 
 	BackupStoreTypeS3     = "s3"
 	BackupStoreTypeCIFS   = "cifs"

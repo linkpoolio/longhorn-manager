@@ -2146,6 +2146,16 @@ func (imc *InstanceManagerController) createInstanceManagerPodSpec(im *longhorn.
 				Value: ratio,
 			})
 		}
+		priorityClass, err := imc.ds.GetSettingValueExistedByDataEngine(types.SettingNameDataEngineRdmaPriorityClass, dataEngine)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get %v setting", types.SettingNameDataEngineRdmaPriorityClass)
+		}
+		if priorityClass != "" {
+			podEnv = append(podEnv, corev1.EnvVar{
+				Name:  types.EnvV2RdmaPriorityClass,
+				Value: priorityClass,
+			})
+		}
 	}
 	podSpec.Spec.Containers[0].Env = podEnv
 

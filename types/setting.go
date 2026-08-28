@@ -161,6 +161,7 @@ const (
 	SettingNameDataEngineLogFlags                                       = SettingName("data-engine-log-flags")
 	SettingNameDataEngineInterruptModeEnabled                           = SettingName("data-engine-interrupt-mode-enabled")
 	SettingNameDataEngineLvstoreMdPagesPerClusterRatio                  = SettingName("data-engine-lvstore-md-pages-per-cluster-ratio")
+	SettingNameDataEngineRdmaPriorityClass                              = SettingName("data-engine-rdma-priority-class")
 	SettingNameFreezeFilesystemForSnapshot                              = SettingName("freeze-filesystem-for-snapshot")
 	SettingNameAutoCleanupSnapshotWhenDeleteBackup                      = SettingName("auto-cleanup-when-delete-backup")
 	SettingNameAutoCleanupSnapshotAfterOnDemandBackupCompleted          = SettingName("auto-cleanup-snapshot-after-on-demand-backup-completed")
@@ -286,6 +287,7 @@ var (
 		SettingNameSnapshotDataIntegrity,
 		SettingNameDataEngineInterruptModeEnabled,
 		SettingNameDataEngineLvstoreMdPagesPerClusterRatio,
+		SettingNameDataEngineRdmaPriorityClass,
 		SettingNameReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume,
@@ -449,6 +451,7 @@ var (
 		SettingNameDataEngineLogFlags:                                       SettingDefinitionDataEngineLogFlags,
 		SettingNameDataEngineInterruptModeEnabled:                           SettingDefinitionDataEngineInterruptModeEnabled,
 		SettingNameDataEngineLvstoreMdPagesPerClusterRatio:                  SettingDefinitionDataEngineLvstoreMdPagesPerClusterRatio,
+		SettingNameDataEngineRdmaPriorityClass:                              SettingDefinitionDataEngineRdmaPriorityClass,
 		SettingNameReplicaDiskSoftAntiAffinity:                              SettingDefinitionReplicaDiskSoftAntiAffinity,
 		SettingNameAllowEmptyNodeSelectorVolume:                             SettingDefinitionAllowEmptyNodeSelectorVolume,
 		SettingNameAllowEmptyDiskSelectorVolume:                             SettingDefinitionAllowEmptyDiskSelectorVolume,
@@ -1902,6 +1905,23 @@ var (
 		ValueIntRange: map[string]int{
 			ValueIntRangeMinimum: 100,
 			ValueIntRangeMaximum: 10000,
+		},
+	}
+
+	SettingDefinitionDataEngineRdmaPriorityClass = SettingDefinition{
+		DisplayName: "RDMA Priority Class",
+		Description: "Applies only to the V2 Data Engine. IEEE 802.1p / RoCE priority class (0-7) used to " +
+			"DSCP-tag outbound NVMe-oF RDMA traffic. TOS = priority << 5 (Class Selector DSCP). 0 is the " +
+			"RDMA/SPDK default (untagged / CS0). Takes effect on instance-manager restart.",
+		Category:           SettingCategoryGeneral,
+		Type:               SettingTypeInt,
+		Required:           true,
+		ReadOnly:           false,
+		DataEngineSpecific: true,
+		Default:            fmt.Sprintf("{%q:\"0\"}", longhorn.DataEngineTypeV2),
+		ValueIntRange: map[string]int{
+			ValueIntRangeMinimum: 0,
+			ValueIntRangeMaximum: 7,
 		},
 	}
 
