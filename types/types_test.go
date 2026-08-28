@@ -521,6 +521,15 @@ func (s *TestSuite) TestNormalizeCPUMask(c *C) {
 	}
 }
 
+func (s *TestSuite) TestValidateSettingDataEngineRdmaPriorityClass(c *C) {
+	name := string(SettingNameDataEngineRdmaPriorityClass)
+	c.Assert(ValidateSetting(name, `{"v2":"0"}`), IsNil)
+	c.Assert(ValidateSetting(name, `{"v2":"3"}`), IsNil)
+	c.Assert(ValidateSetting(name, `{"v2":"7"}`), IsNil)
+	c.Assert(ValidateSetting(name, `{"v2":"8"}`), NotNil)
+	c.Assert(ValidateSetting(name, `{"v2":"-1"}`), NotNil)
+}
+
 func (s *TestSuite) TestIsHexCPUMask(c *C) {
 	type testCase struct {
 		input    string
